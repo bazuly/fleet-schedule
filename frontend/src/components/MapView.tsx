@@ -8,12 +8,8 @@ import type { MapTarget } from "@/lib/store";
 import styles from "./MapView.module.css";
 
 const REFRESH_MS = 30_000;
-const LIGHT_TILES = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
-const DARK_TILES = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
-
-function tileUrl() {
-  return document.documentElement.dataset.theme === "dark" ? DARK_TILES : LIGHT_TILES;
-}
+/** Светлая подложка OSM. Тёмные тайлы CARTO с сентября 2026 без ключа не отдаются. */
+const TILES = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const KIND_LABEL = { tractor: "Тягач", trailer: "Прицеп" } as const;
 const KIND_COLOR = { tractor: "#1a73e8", trailer: "#e8710a" } as const;
 
@@ -55,7 +51,6 @@ export default function MapView({ target }: Props) {
   const mapRef = useRef<Leaflet.Map | null>(null);
   const leafletRef = useRef<typeof Leaflet | null>(null);
   const layerRef = useRef<Leaflet.LayerGroup | null>(null);
-  const tilesRef = useRef<Leaflet.TileLayer | null>(null);
   const fittedRef = useRef<string | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const [result, setResult] = useState<{ key: string; located: Located[] } | null>(null);
@@ -74,11 +69,7 @@ export default function MapView({ target }: Props) {
       if (cancelled || !boxRef.current) return;
       leafletRef.current = L;
       map = L.map(boxRef.current, { zoomControl: true, attributionControl: false }).setView([59.94, 30.31], 6);
-      const tiles = L.tileLayer(tileUrl(), {
-        maxZoom: 19,
-        subdomains: document.documentElement.dataset.theme === "dark" ? "abcd" : "abc",
-      }).addTo(map);
-      tilesRef.current = tiles;
+      L.tileLayer(TILES, { maxZoom: 19 }).addTo(map);
       layerRef.current = L.layerGroup().addTo(map);
       mapRef.current = map;
       ro = new ResizeObserver(() => map?.invalidateSize());
@@ -91,25 +82,7 @@ export default function MapView({ target }: Props) {
       map?.remove();
       mapRef.current = null;
       layerRef.current = null;
-      tilesRef.current = null;
     };
-  }, []);
-
-  useEffect(() => {
-    const apply = () => {
-      const map = mapRef.current;
-      const L = leafletRef.current;
-      if (!map || !L) return;
-      tilesRef.current?.remove();
-      const tiles = L.tileLayer(tileUrl(), {
-        maxZoom: 19,
-        subdomains: document.documentElement.dataset.theme === "dark" ? "abcd" : "abc",
-      }).addTo(map);
-      tiles.bringToBack();
-      tilesRef.current = tiles;
-    };
-    window.addEventListener("fleet-theme", apply);
-    return () => window.removeEventListener("fleet-theme", apply);
   }, []);
 
   useEffect(() => {

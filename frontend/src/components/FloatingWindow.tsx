@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import styles from "./FloatingWindow.module.css";
 
 export interface WindowGeometry {
@@ -75,19 +75,19 @@ export default function FloatingWindow({ title, geometry, zIndex, accent, onChan
   }, []);
   const fitted = displayGeometry(geometry, frame.w, frame.h);
   const g = op && draft ? draft : fitted;
-  const geometryRef = useRef(geometry);
-  geometryRef.current = geometry;
 
   useEffect(() => {
     if (!op) return;
     const onMove = (e: PointerEvent) => setDraft(applyOp(op, e.clientX, e.clientY));
     const onUp = (e: PointerEvent) => {
       const visual = applyOp(op, e.clientX, e.clientY);
-      const current = geometryRef.current;
       setOp(null);
       setDraft(null);
-      if (!fitsViewport(current, window.innerWidth, window.innerHeight)) return;
-      onChange(op.kind === "move" ? { ...current, x: visual.x, y: visual.y } : visual);
+      // Короткий клик по заголовку не переписывает сохранённый размер.
+      if (Math.abs(e.clientX - op.sx) < 3 && Math.abs(e.clientY - op.sy) < 3) return;
+      // Сохраняем то, что пользователь только что сдвинул. Иначе окно, не влезающее
+      // в текущий экран, после отпускания мыши прыгает обратно.
+      onChange(visual);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
