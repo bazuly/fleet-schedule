@@ -18,6 +18,14 @@ export const cellKey = (rowId: string, day: string) => `${rowId}|${day}`;
 export interface CellData {
   value: string;
   bg: string | null;
+  fg: string | null;
+  comment: string;
+}
+
+export const EMPTY_CELL: CellData = { value: "", bg: null, fg: null, comment: "" };
+
+export function isBlank(c: CellData): boolean {
+  return !c.value && !c.bg && !c.fg && !c.comment;
 }
 
 export interface Edit {
@@ -25,6 +33,8 @@ export interface Edit {
   col: ColKey;
   value?: string;
   bg?: string | null;
+  fg?: string | null;
+  comment?: string;
 }
 
 interface Batch {
@@ -46,6 +56,8 @@ export interface ClipboardData {
   tsv: string;
   values: string[][];
   bgs: (string | null)[][];
+  fgs: (string | null)[][];
+  comments: string[][];
   cut?: { gridId: Panel; rowIds: string[]; colKeys: ColKey[] };
 }
 
@@ -65,6 +77,8 @@ interface State {
   clipboard: ClipboardData | null;
   active: ActiveSelection | null;
   syncScroll: boolean;
+  /** 1 = 100%, как в Google Таблицах. */
+  zoom: number;
 
   setUser(u: User | null): void;
   setRange(from: string, to: string): Promise<void>;
@@ -83,6 +97,8 @@ interface State {
   setClipboard(c: ClipboardData | null): void;
   setActive(a: ActiveSelection | null): void;
   setSyncScroll(v: boolean): void;
+  setZoom(z: number): void;
+  stepZoom(dir: 1 | -1): void;
   applyBgToActive(bg: string | null): void;
 
   addRow(panel: Panel): Promise<void>;
@@ -92,10 +108,14 @@ interface State {
 }
 
 const UNDO_LIMIT = 200;
+const ZOOM_KEY = "fleet.zoom";
+export const ZOOMS = [0.5, 0.75, 0.9, 1, 1.25, 1.5, 2];
 
 function defaultRange() {
   const today = todayIso();
-  return { from: addDays(today, -30), to: addDays(today, 90) };
+  // План загружен с октября 2025; вперёд оставляем запас после сегодняшнего дня.
+  const end = addDays(today, 40);
+  return { from: "2025-10-01", to: end > "2026-12-31" ? end : "2026-12-31" };
 }
 
 export function sortedRowIds(rows: Record<string, Row>, panel: Panel): string[] {
@@ -112,8 +132,9 @@ export const useStore = create<State>((set, get) => {
       const next = new Map(get().cells);
       for (const c of cells) {
         const k = cellKey(c.row_id, c.day);
-        if (!c.value && !c.bg) next.delete(k);
-        else next.set(k, { value: c.value, bg: c.bg });
+        const data = { value: c.value, bg: c.bg, fg: c.fg, comment: c.comment ?? "" };
+        if (isBlank(data)) next.delete(k);
+        else next.set(k, data);
       }
       set({ cells: next });
       api.putCells(cells).catch((e) => {
@@ -147,6 +168,7 @@ export const useStore = create<State>((set, get) => {
     clipboard: null,
     active: null,
     syncScroll: true,
+    zoom: 1,
 
     setUser: (user) => set({ user }),
 
@@ -163,7 +185,14 @@ export const useStore = create<State>((set, get) => {
         const rowMap: Record<string, Row> = {};
         for (const r of rows) rowMap[r.id] = r;
         const cellMap = new Map<string, CellData>();
-        for (const c of cells) cellMap.set(cellKey(c.row_id, c.day), { value: c.value, bg: c.bg });
+        for (const c of cells) {
+          cellMap.set(cellKey(c.row_id, c.day), {
+            value: c.value,
+            bg: c.bg,
+            fg: c.fg,
+            comment: c.comment ?? "",
+          });
+        }
         set({ rows: rowMap, cells: cellMap });
       } catch (e) {
         get().showToast(`Ошибка загрузки: ${(e as Error).message}`);
@@ -187,8 +216,9 @@ export const useStore = create<State>((set, get) => {
       for (const c of cells) {
         if (c.day < from || c.day > to) continue;
         const k = cellKey(c.row_id, c.day);
-        if (!c.value && !c.bg) next.delete(k);
-        else next.set(k, { value: c.value, bg: c.bg });
+        const data = { value: c.value, bg: c.bg, fg: c.fg, comment: c.comment ?? "" };
+        if (isBlank(data)) next.delete(k);
+        else next.set(k, data);
       }
       set({ cells: next });
     },
@@ -223,12 +253,14 @@ export const useStore = create<State>((set, get) => {
 
         if (isDayCol(e.col)) {
           const day = colDay(e.col);
-          const prev = cells.get(cellKey(e.rowId, day)) ?? { value: "", bg: null };
+          const prev = cells.get(cellKey(e.rowId, day)) ?? EMPTY_CELL;
           const value = e.value ?? prev.value;
           const bg = e.bg !== undefined ? e.bg : prev.bg;
-          if (value === prev.value && bg === prev.bg) continue;
-          cellsBefore.push({ row_id: e.rowId, day, value: prev.value, bg: prev.bg });
-          cellsAfter.push({ row_id: e.rowId, day, value, bg });
+          const fg = e.fg !== undefined ? e.fg : prev.fg;
+          const comment = e.comment !== undefined ? e.comment : prev.comment;
+          if (value === prev.value && bg === prev.bg && fg === prev.fg && comment === prev.comment) continue;
+          cellsBefore.push({ row_id: e.rowId, day, ...prev });
+          cellsAfter.push({ row_id: e.rowId, day, value, bg, fg, comment });
         } else if (e.value !== undefined) {
           const field = colField(e.col);
           const prev = rows[e.rowId][field];
@@ -271,6 +303,16 @@ export const useStore = create<State>((set, get) => {
     setClipboard: (clipboard) => set({ clipboard }),
     setActive: (active) => set({ active }),
     setSyncScroll: (syncScroll) => set({ syncScroll }),
+    setZoom(zoom) {
+      const next = ZOOMS.includes(zoom) ? zoom : 1;
+      localStorage.setItem(ZOOM_KEY, String(next));
+      set({ zoom: next });
+    },
+    stepZoom(dir) {
+      const current = get().zoom;
+      const index = Math.max(0, ZOOMS.indexOf(current));
+      get().setZoom(ZOOMS[Math.min(ZOOMS.length - 1, Math.max(0, index + dir))]);
+    },
 
     applyBgToActive(bg) {
       const a = get().active;

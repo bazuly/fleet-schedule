@@ -35,7 +35,7 @@ pub async fn list(
         return Err(AppError::BadRequest("invalid date range".into()));
     }
     let cells = sqlx::query_as::<_, Cell>(
-        "SELECT row_id, day, value, bg FROM cells WHERE day BETWEEN $1 AND $2",
+        "SELECT row_id, day, value, bg, fg, comment FROM cells WHERE day BETWEEN $1 AND $2",
     )
     .bind(from)
     .bind(to)
@@ -49,7 +49,7 @@ pub struct PutCells {
     cells: Vec<Cell>,
 }
 
-/// Пакетная запись ячеек. Пустая ячейка без заливки удаляется.
+/// Пакетная запись ячеек. Ячейка без текста, заливки, цвета текста и комментария удаляется.
 pub async fn put(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -64,13 +64,17 @@ pub async fn put(
     let mut upsert_days: Vec<NaiveDate> = Vec::new();
     let mut upsert_values: Vec<String> = Vec::new();
     let mut upsert_bgs: Vec<Option<String>> = Vec::new();
+    let mut upsert_fgs: Vec<Option<String>> = Vec::new();
+    let mut upsert_comments: Vec<String> = Vec::new();
     let mut delete_rows: Vec<Uuid> = Vec::new();
     let mut delete_days: Vec<NaiveDate> = Vec::new();
     let mut normalized = Vec::with_capacity(req.cells.len());
 
     for mut c in req.cells {
         c.bg = c.bg.filter(|b| !b.is_empty());
-        if c.value.is_empty() && c.bg.is_none() {
+        c.fg = c.fg.filter(|b| !b.is_empty());
+        c.comment = c.comment.trim().chars().take(4000).collect();
+        if c.value.is_empty() && c.bg.is_none() && c.fg.is_none() && c.comment.is_empty() {
             delete_rows.push(c.row_id);
             delete_days.push(c.day);
         } else {
@@ -78,6 +82,8 @@ pub async fn put(
             upsert_days.push(c.day);
             upsert_values.push(c.value.clone());
             upsert_bgs.push(c.bg.clone());
+            upsert_fgs.push(c.fg.clone());
+            upsert_comments.push(c.comment.clone());
         }
         normalized.push(c);
     }
@@ -96,13 +102,16 @@ pub async fn put(
     }
     if !upsert_rows.is_empty() {
         sqlx::query(
-            "INSERT INTO cells (row_id, day, value, bg, updated_by, updated_at)
-             SELECT d.row_id, d.day, d.value, d.bg, $5, now()
-             FROM UNNEST($1::uuid[], $2::date[], $3::text[], $4::text[]) AS d(row_id, day, value, bg)
+            "INSERT INTO cells (row_id, day, value, bg, fg, comment, updated_by, updated_at)
+             SELECT d.row_id, d.day, d.value, d.bg, d.fg, d.comment, $7, now()
+             FROM UNNEST($1::uuid[], $2::date[], $3::text[], $4::text[], $5::text[], $6::text[])
+                AS d(row_id, day, value, bg, fg, comment)
              WHERE EXISTS (SELECT 1 FROM schedule_rows r WHERE r.id = d.row_id)
              ON CONFLICT (row_id, day) DO UPDATE SET
                 value = EXCLUDED.value,
                 bg = EXCLUDED.bg,
+                fg = EXCLUDED.fg,
+                comment = EXCLUDED.comment,
                 updated_by = EXCLUDED.updated_by,
                 updated_at = EXCLUDED.updated_at",
         )
@@ -110,6 +119,8 @@ pub async fn put(
         .bind(&upsert_days)
         .bind(&upsert_values)
         .bind(&upsert_bgs)
+        .bind(&upsert_fgs)
+        .bind(&upsert_comments)
         .bind(user.id)
         .execute(&mut *tx)
         .await?;

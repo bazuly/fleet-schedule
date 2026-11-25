@@ -26,6 +26,8 @@ export interface Cell {
   day: string;
   value: string;
   bg: string | null;
+  fg: string | null;
+  comment: string;
 }
 
 export type RowPatch = { id: string } & Partial<Pick<Row, RowField | "position">>;

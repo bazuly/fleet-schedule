@@ -14,6 +14,7 @@ import {
   type ColKey,
   type Edit,
 } from "@/lib/store";
+import CommentBox from "./CommentBox";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import styles from "./Grid.module.css";
 
@@ -28,11 +29,10 @@ interface Props {
   frozen: FrozenCol[];
 }
 
-export const ROW_H = 22;
-export const COL_W = 116;
-const HEADER_H = 38;
-const GUTTER_W = 38;
-const MAX_SPILL = 8;
+const BASE_CELL = 96;
+const BASE_HEADER = 40;
+const BASE_GUTTER = 38;
+const MAX_SPILL = 6;
 const OVERSCAN = 3;
 
 type Pos = { r: number; c: number };
@@ -60,6 +60,12 @@ export default function Grid({ panel, frozen }: Props) {
   const days = useMemo(() => daysBetween(range.from, range.to), [range]);
   const today = todayIso();
   const todayIdx = days.indexOf(today);
+  const zoom = useStore((s) => s.zoom);
+  const rowH = Math.round(BASE_CELL * zoom);
+  const colW = Math.round(BASE_CELL * zoom);
+  const headerH = Math.max(30, Math.round(BASE_HEADER * zoom));
+  const gutterW = Math.max(28, Math.round(BASE_GUTTER * zoom));
+  const scaled = (px: number) => Math.round(px * zoom);
 
   const K = frozen.length;
   const N = rowIds.length;
@@ -70,13 +76,13 @@ export default function Grid({ panel, frozen }: Props) {
     let x = 0;
     for (const f of frozen) {
       xs.push(x);
-      x += f.width;
+      x += Math.round(f.width * zoom);
     }
     xs.push(x);
     return xs;
-  }, [frozen]);
+  }, [frozen, zoom]);
   const frozenW = frozenX[K];
-  const leftW = GUTTER_W + frozenW;
+  const leftW = gutterW + frozenW;
 
   const rootRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -96,7 +102,9 @@ export default function Grid({ panel, frozen }: Props) {
   const [scroll, setScroll] = useState({ top: 0, left: 0 });
   const [viewport, setViewport] = useState({ w: 1200, h: 600 });
   const [drag, setDrag] = useState<Drag | null>(null);
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; r: number; c: number } | null>(null);
+  const [noteEdit, setNoteEdit] = useState<{ r: number; c: number; x: number; y: number } | null>(null);
+  const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null);
   const [focused, setFocused] = useState(false);
   const suppressSyncRef = useRef(false);
 
@@ -115,11 +123,11 @@ export default function Grid({ panel, frozen }: Props) {
     [rowIds, rows, cells, days, K, frozen],
   );
 
-  const bgAt = useCallback(
-    (r: number, c: number): string | null => {
-      if (c < K) return null;
+  const cellAt = useCallback(
+    (r: number, c: number) => {
+      if (c < K) return undefined;
       const id = rowIds[r];
-      return id ? (cells.get(cellKey(id, days[c - K]))?.bg ?? null) : null;
+      return id ? cells.get(cellKey(id, days[c - K])) : undefined;
     },
     [rowIds, cells, days, K],
   );
@@ -173,23 +181,59 @@ export default function Grid({ panel, frozen }: Props) {
   const onScroll = () => {
     const el = bodyRef.current!;
     setScroll({ top: el.scrollTop, left: el.scrollLeft });
+    setTip(null);
     if (suppressSyncRef.current) {
       suppressSyncRef.current = false;
       return;
     }
-    if (useStore.getState().syncScroll) scrollBus.emit(panel, el.scrollLeft);
+    // Листает даты только основной график. Окна за ним следуют, но сами его не двигают.
+    if (panel === "main" && useStore.getState().syncScroll) scrollBus.emit(panel, el.scrollLeft);
   };
 
   useEffect(
     () =>
       scrollBus.subscribe((source, left) => {
         const el = bodyRef.current;
-        if (!el || source === panel || Math.abs(el.scrollLeft - left) < 1) return;
+        if (panel === "main" || source !== "main" || !useStore.getState().syncScroll) return;
+        if (!el || Math.abs(el.scrollLeft - left) < 1) return;
         suppressSyncRef.current = true;
         el.scrollLeft = left;
       }),
     [panel],
   );
+
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    let acc = 0;
+    let last = 0;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      acc += e.deltaY;
+      if (Math.abs(acc) < 40) return;
+      const dir = acc < 0 ? 1 : -1;
+      acc = 0;
+      const now = performance.now();
+      if (now - last < 90) return;
+      last = now;
+      useStore.getState().stepZoom(dir);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  const zoomRef = useRef(zoom);
+  useEffect(() => {
+    const el = bodyRef.current;
+    const prev = zoomRef.current;
+    zoomRef.current = zoom;
+    if (!el || prev === zoom) return;
+    const ratio = zoom / prev;
+    suppressSyncRef.current = true;
+    el.scrollLeft *= ratio;
+    el.scrollTop *= ratio;
+  }, [zoom]);
 
   const scrollToDay = useCallback(
     (day: string) => {
@@ -197,9 +241,9 @@ export default function Grid({ panel, frozen }: Props) {
       const idx = days.indexOf(day);
       if (!el || idx < 0) return;
       suppressSyncRef.current = true;
-      el.scrollLeft = Math.max(0, (idx - 2) * COL_W);
+      el.scrollLeft = Math.max(0, (idx - 2) * colW);
     },
-    [days],
+    [days, colW],
   );
   useEffect(() => scrollBus.subscribeDay(scrollToDay), [scrollToDay]);
 
@@ -214,16 +258,16 @@ export default function Grid({ panel, frozen }: Props) {
     (p: Pos) => {
       const el = bodyRef.current;
       if (!el) return;
-      const y = p.r * ROW_H;
+      const y = p.r * rowH;
       if (y < el.scrollTop) el.scrollTop = y;
-      else if (y + ROW_H > el.scrollTop + el.clientHeight) el.scrollTop = y + ROW_H - el.clientHeight;
+      else if (y + rowH > el.scrollTop + el.clientHeight) el.scrollTop = y + rowH - el.clientHeight;
       if (p.c >= K) {
-        const x = (p.c - K) * COL_W;
+        const x = (p.c - K) * colW;
         if (x < el.scrollLeft) el.scrollLeft = x;
-        else if (x + COL_W > el.scrollLeft + el.clientWidth) el.scrollLeft = x + COL_W - el.clientWidth;
+        else if (x + colW > el.scrollLeft + el.clientWidth) el.scrollLeft = x + colW - el.clientWidth;
       }
     },
-    [K],
+    [K, rowH, colW],
   );
 
   // ---------- Выделение и навигация ----------
@@ -331,27 +375,36 @@ export default function Grid({ panel, frozen }: Props) {
   const selectionMatrix = useCallback(() => {
     const values: string[][] = [];
     const bgs: (string | null)[][] = [];
+    const fgs: (string | null)[][] = [];
+    const comments: string[][] = [];
     for (let r = bounds.r0; r <= bounds.r1; r++) {
       const vr: string[] = [];
       const br: (string | null)[] = [];
+      const fr: (string | null)[] = [];
+      const cr: string[] = [];
       for (let c = bounds.c0; c <= bounds.c1; c++) {
+        const cell = cellAt(r, c);
         vr.push(valueAt(r, c));
-        br.push(bgAt(r, c));
+        br.push(cell?.bg ?? null);
+        fr.push(cell?.fg ?? null);
+        cr.push(cell?.comment ?? "");
       }
       values.push(vr);
       bgs.push(br);
+      fgs.push(fr);
+      comments.push(cr);
     }
-    return { values, bgs };
-  }, [bounds, valueAt, bgAt]);
+    return { values, bgs, fgs, comments };
+  }, [bounds, valueAt, cellAt]);
 
   const doCopy = useCallback(
     (cut: boolean, dt?: DataTransfer | null) => {
       if (N === 0) return;
-      const { values, bgs } = selectionMatrix();
+      const { values, bgs, fgs, comments } = selectionMatrix();
       const tsv = toTsv(values);
       if (dt) {
         dt.setData("text/plain", tsv);
-        dt.setData("text/html", toHtmlTable(values, bgs));
+        dt.setData("text/html", toHtmlTable(values, bgs, fgs));
       } else {
         void navigator.clipboard?.writeText(tsv).catch(() => {});
       }
@@ -361,6 +414,8 @@ export default function Grid({ panel, frozen }: Props) {
         tsv,
         values,
         bgs,
+        fgs,
+        comments,
         cut: cut
           ? { gridId: panel, rowIds: rowIds.slice(bounds.r0, bounds.r1 + 1), colKeys: cols }
           : undefined,
@@ -377,6 +432,8 @@ export default function Grid({ panel, frozen }: Props) {
       const internal = clip && clip.tsv === normalized ? clip : null;
       const values = internal ? internal.values : parseTsv(normalized);
       const bgs = internal ? internal.bgs : null;
+      const fgs = internal ? internal.fgs : null;
+      const comments = internal ? internal.comments : null;
       if (!values.length || !values[0].length) return;
 
       const h = values.length;
@@ -394,7 +451,12 @@ export default function Grid({ panel, frozen }: Props) {
           const sr = single ? 0 : r - r0;
           const sc = single ? 0 : c - c0;
           const edit: Edit = { rowId: rowIds[r], col: colKey(c), value: values[sr]?.[sc] ?? "" };
-          if (bgs && c >= K) edit.bg = bgs[sr]?.[sc] ?? null;
+          if (bgs && c >= K) {
+            edit.bg = bgs[sr]?.[sc] ?? null;
+            edit.fg = fgs?.[sr]?.[sc] ?? null;
+            // Комментарий не размножаем, когда одно значение заливает весь диапазон.
+            if (comments && (!single || (r === r0 && c === c0))) edit.comment = comments[sr]?.[sc] ?? "";
+          }
           target.set(`${edit.rowId}|${edit.col}`, edit);
         }
       }
@@ -404,7 +466,13 @@ export default function Grid({ panel, frozen }: Props) {
         for (const rowId of internal.cut.rowIds)
           for (const col of internal.cut.colKeys) {
             const k = `${rowId}|${col}`;
-            if (!target.has(k)) edits.push({ rowId, col, value: "", bg: col.startsWith("d:") ? null : undefined });
+            if (!target.has(k)) {
+              edits.push(
+                col.startsWith("d:")
+                  ? { rowId, col, value: "", bg: null, fg: null, comment: "" }
+                  : { rowId, col, value: "" },
+              );
+            }
           }
         useStore.getState().setClipboard(null);
       }
@@ -464,13 +532,17 @@ export default function Grid({ panel, frozen }: Props) {
           const sr = r0 + mod(r - r0, h);
           const sc = c0 + mod(c - c0, w);
           const edit: Edit = { rowId: rowIds[r], col: colKey(c), value: valueAt(sr, sc) };
-          if (c >= K && sc >= K) edit.bg = bgAt(sr, sc);
+          if (c >= K && sc >= K) {
+            const src = cellAt(sr, sc);
+            edit.bg = src?.bg ?? null;
+            edit.fg = src?.fg ?? null;
+          }
           edits.push(edit);
         }
       applyEdits(edits);
       setSel({ anchor: { r: rect.r0, c: rect.c0 }, focus: { r: rect.r1, c: rect.c1 } });
     },
-    [fillRect, bounds, rowIds, colKey, valueAt, bgAt, applyEdits, K],
+    [fillRect, bounds, rowIds, colKey, valueAt, cellAt, applyEdits, K],
   );
 
   // ---------- Мышь ----------
@@ -480,10 +552,10 @@ export default function Grid({ panel, frozen }: Props) {
       const body = bodyRef.current!.getBoundingClientRect();
       const root = rootRef.current!.getBoundingClientRect();
       const el = bodyRef.current!;
-      const r = clientY < body.top ? -1 : Math.floor((clientY - body.top + el.scrollTop) / ROW_H);
+      const r = clientY < body.top ? -1 : Math.floor((clientY - body.top + el.scrollTop) / rowH);
       let c: number;
       if (clientX < body.left) {
-        const x = clientX - root.left - GUTTER_W;
+        const x = clientX - root.left - gutterW;
         if (x < 0) c = -1;
         else {
           c = K - 1;
@@ -494,11 +566,11 @@ export default function Grid({ panel, frozen }: Props) {
             }
         }
       } else {
-        c = K + Math.floor((clientX - body.left + el.scrollLeft) / COL_W);
+        c = K + Math.floor((clientX - body.left + el.scrollLeft) / colW);
       }
       return { r, c };
     },
-    [K, frozenX],
+    [K, frozenX, rowH, colW, gutterW],
   );
 
   const onMouseDown = (e: React.MouseEvent) => {
@@ -641,10 +713,10 @@ export default function Grid({ panel, frozen }: Props) {
         select(mod ? { r: N - 1, c: C - 1 } : { r: sel.anchor.r, c: C - 1 });
         break;
       case "PageDown":
-        move(Math.max(1, Math.floor(viewport.h / ROW_H) - 1), 0, e.shiftKey);
+        move(Math.max(1, Math.floor(viewport.h / rowH) - 1), 0, e.shiftKey);
         break;
       case "PageUp":
-        move(-Math.max(1, Math.floor(viewport.h / ROW_H) - 1), 0, e.shiftKey);
+        move(-Math.max(1, Math.floor(viewport.h / rowH) - 1), 0, e.shiftKey);
         break;
       default:
         handled = false;
@@ -724,6 +796,10 @@ export default function Grid({ panel, frozen }: Props) {
   // ---------- Контекстное меню ----------
 
   const selectedRowIds = rowIds.slice(bounds.r0, bounds.r1 + 1);
+  const commentTarget = menu && menu.c >= K && menu.r >= 0 && menu.r < N ? { r: menu.r, c: menu.c } : null;
+  const commentText = commentTarget
+    ? (cells.get(cellKey(rowIds[commentTarget.r], days[commentTarget.c - K]))?.comment ?? "")
+    : "";
   const menuItems: MenuItem[] = [
     { label: "Вырезать", hint: "⌘X", onClick: () => doCopy(true) },
     { label: "Копировать", hint: "⌘C", onClick: () => doCopy(false) },
@@ -738,6 +814,24 @@ export default function Grid({ panel, frozen }: Props) {
         doPaste(text);
       },
     },
+    { separator: true },
+    {
+      label: commentText ? "Изменить комментарий" : "Добавить комментарий",
+      disabled: !commentTarget,
+      onClick: () => {
+        if (commentTarget && menu) setNoteEdit({ ...commentTarget, x: menu.x, y: menu.y });
+      },
+    },
+    ...(commentText
+      ? [
+          {
+            label: "Удалить комментарий",
+            onClick: () =>
+              commentTarget &&
+              applyEdits([{ rowId: rowIds[commentTarget.r], col: colKey(commentTarget.c), comment: "" }]),
+          } satisfies MenuItem,
+        ]
+      : []),
     { separator: true },
     { label: "Очистить содержимое", hint: "Del", onClick: () => clearSelection("value") },
     { label: "Убрать заливку", onClick: () => clearSelection("bg") },
@@ -774,10 +868,10 @@ export default function Grid({ panel, frozen }: Props) {
 
   // ---------- Отрисовка ----------
 
-  const r0v = Math.max(0, Math.floor(scroll.top / ROW_H) - OVERSCAN);
-  const r1v = Math.min(N - 1, Math.ceil((scroll.top + viewport.h) / ROW_H) + OVERSCAN);
-  const d0v = Math.max(0, Math.floor(scroll.left / COL_W) - OVERSCAN);
-  const d1v = Math.min(D - 1, Math.ceil((scroll.left + viewport.w) / COL_W) + OVERSCAN);
+  const r0v = Math.max(0, Math.floor(scroll.top / rowH) - OVERSCAN);
+  const r1v = Math.min(N - 1, Math.ceil((scroll.top + viewport.h) / rowH) + OVERSCAN);
+  const d0v = Math.max(0, Math.floor(scroll.left / colW) - OVERSCAN);
+  const d1v = Math.min(D - 1, Math.ceil((scroll.left + viewport.w) / colW) + OVERSCAN);
 
   const bodyCells: React.ReactNode[] = [];
   for (let r = r0v; r <= r1v; r++) {
@@ -785,9 +879,14 @@ export default function Grid({ panel, frozen }: Props) {
     for (let d = Math.max(0, d0v - MAX_SPILL); d <= d1v; d++) {
       const data = cells.get(cellKey(id, days[d]));
       if (!data) continue;
+      // Текст многодневного рейса тянется по ячейкам с той же заливкой и без своего текста.
       let spill = 1;
-      if (data.value) {
-        while (spill <= MAX_SPILL && d + spill < D && !cells.get(cellKey(id, days[d + spill]))?.value) spill++;
+      if (data.value && data.bg) {
+        while (spill < MAX_SPILL && d + spill < D) {
+          const next = cells.get(cellKey(id, days[d + spill]));
+          if (!next || next.value || next.bg !== data.bg) break;
+          spill++;
+        }
       }
       if (d + spill - 1 < d0v) continue;
       bodyCells.push(
@@ -795,16 +894,27 @@ export default function Grid({ panel, frozen }: Props) {
           key={`${id}|${d}`}
           className={styles.cell}
           style={{
-            left: d * COL_W + 1,
-            top: r * ROW_H + 1,
-            background: data.bg ?? undefined,
-            zIndex: data.value ? 1 : 0,
+            left: d * colW + 1,
+            top: r * rowH + 1,
+            width: colW - 1,
+            height: rowH - 1,
+            background: data.bg || undefined,
+            zIndex: data.value ? 2 : 1,
           }}
-          title={data.value.length > 14 ? data.value : undefined}
+          onMouseEnter={
+            data.comment
+              ? (e) => setTip({ x: e.clientX + 14, y: e.clientY + 18, text: data.comment })
+              : undefined
+          }
+          onMouseLeave={data.comment ? () => setTip(null) : undefined}
         >
+          {data.comment && <span className={styles.noteMark} />}
           {data.value && (
-            <span className={styles.cellText} style={{ width: spill * COL_W - 7 }}>
-              {data.value.replace(/\n/g, " ")}
+            <span
+              className={styles.cellText}
+              style={{ width: spill * colW - 4, height: rowH - 4, color: data.fg || undefined }}
+            >
+              <span>{data.value}</span>
             </span>
           )}
         </div>,
@@ -823,18 +933,18 @@ export default function Grid({ panel, frozen }: Props) {
         <div
           key={`w${d}`}
           className={isToday ? styles.todayCol : styles.weekendCol}
-          style={{ left: d * COL_W, width: COL_W }}
+          style={{ left: d * colW, width: colW }}
         />,
       );
     if (isFirstOfMonth(days[d]))
-      columnDecor.push(<div key={`m${d}`} className={styles.monthLine} style={{ left: d * COL_W }} />);
+      columnDecor.push(<div key={`m${d}`} className={styles.monthLine} style={{ left: d * colW }} />);
     headers.push(
       <div
         key={d}
         className={`${styles.dayHeader} ${h.weekend ? styles.weekend : ""} ${isToday ? styles.today : ""} ${
           selectedCol ? styles.headerSelected : ""
         } ${isFirstOfMonth(days[d]) ? styles.monthStart : ""}`}
-        style={{ left: d * COL_W, width: COL_W }}
+        style={{ left: d * colW, width: colW }}
       >
         <span className={styles.dayDate}>{h.date}</span>
         <span className={styles.dayWeekday}>{h.weekday}</span>
@@ -851,7 +961,7 @@ export default function Grid({ panel, frozen }: Props) {
       <div
         key={`g${id}`}
         className={`${styles.gutter} ${selectedRow ? styles.headerSelected : ""}`}
-        style={{ top: r * ROW_H, height: ROW_H }}
+        style={{ top: r * rowH, height: rowH, width: gutterW }}
       >
         {r + 1}
       </div>,
@@ -862,10 +972,10 @@ export default function Grid({ panel, frozen }: Props) {
         <div
           key={`${id}|${f.field}`}
           className={styles.frozenCell}
-          style={{ top: r * ROW_H, left: GUTTER_W + frozenX[i], width: f.width, height: ROW_H }}
+          style={{ top: r * rowH, left: gutterW + frozenX[i], width: scaled(f.width), height: rowH }}
           title={v.length > 20 ? v : undefined}
         >
-          {v.replace(/\n/g, " ")}
+          <span>{v}</span>
         </div>,
       );
     });
@@ -873,13 +983,13 @@ export default function Grid({ panel, frozen }: Props) {
 
   // Прямоугольники выделения в двух панелях — закреплённой и прокручиваемой.
   const selRects = (r0: number, r1: number, c0: number, c1: number) => {
-    const top = r0 * ROW_H;
-    const height = (r1 - r0 + 1) * ROW_H;
+    const top = r0 * rowH;
+    const height = (r1 - r0 + 1) * rowH;
     const frozenRect =
-      c0 < K ? { left: GUTTER_W + frozenX[c0], width: frozenX[Math.min(c1, K - 1) + 1] - frozenX[c0], top, height } : null;
+      c0 < K ? { left: gutterW + frozenX[c0], width: frozenX[Math.min(c1, K - 1) + 1] - frozenX[c0], top, height } : null;
     const bodyRect =
       c1 >= K
-        ? { left: (Math.max(c0, K) - K) * COL_W, width: (c1 - Math.max(c0, K) + 1) * COL_W, top, height }
+        ? { left: (Math.max(c0, K) - K) * colW, width: (c1 - Math.max(c0, K) + 1) * colW, top, height }
         : null;
     return { frozenRect, bodyRect };
   };
@@ -912,14 +1022,14 @@ export default function Grid({ panel, frozen }: Props) {
   let editorNode: React.ReactNode = null;
   if (editing) {
     const inFrozen = editing.c < K;
-    const left = inFrozen ? GUTTER_W + frozenX[editing.c] : (editing.c - K) * COL_W;
-    const width = inFrozen ? Math.max(frozen[editing.c].width, 220) : Math.max(COL_W * 2, 240);
+    const left = inFrozen ? gutterW + frozenX[editing.c] : (editing.c - K) * colW;
+    const width = inFrozen ? Math.max(scaled(frozen[editing.c].width), scaled(220)) : Math.max(colW * 2, scaled(240));
     const lines = editing.value.split("\n").length;
     editorNode = (
       <textarea
         ref={editorRef}
         className={styles.editor}
-        style={{ left, top: editing.r * ROW_H, width, height: Math.max(ROW_H, lines * 17 + 6) }}
+        style={{ left, top: editing.r * rowH, width, height: Math.max(rowH, lines * scaled(18) + 6) }}
         value={editing.value}
         spellCheck={false}
         onChange={onEditorChange}
@@ -929,19 +1039,21 @@ export default function Grid({ panel, frozen }: Props) {
     );
   }
 
-  const contentH = N * ROW_H + ROW_H * 2;
+  const contentH = N * rowH + rowH * 2;
 
   return (
     <div
       ref={rootRef}
       className={`${styles.root} ${focused ? styles.focused : ""}`}
+      style={{ fontSize: scaled(13) }}
       onScroll={resetScroll}
       onMouseDown={onMouseDown}
       onDoubleClick={onDoubleClick}
       onContextMenu={(e) => {
         if ((e.target as HTMLElement).closest("textarea, [data-no-grid]") || N === 0) return;
         e.preventDefault();
-        setMenu({ x: e.clientX, y: e.clientY });
+        const hit = hitTest(e.clientX, e.clientY);
+        setMenu({ x: e.clientX, y: e.clientY, r: hit.r, c: hit.c });
       }}
       onFocus={() => setFocused(true)}
       onBlur={(e) => {
@@ -959,20 +1071,20 @@ export default function Grid({ panel, frozen }: Props) {
         onChange={() => {}}
       />
 
-      <div className={styles.corner} style={{ width: leftW, height: HEADER_H }}>
-        <div className={styles.gutterHeader} style={{ width: GUTTER_W }} />
+      <div className={styles.corner} style={{ width: leftW, height: headerH }}>
+        <div className={styles.gutterHeader} style={{ width: gutterW }} />
         {frozen.map((f, i) => (
           <div
             key={f.field}
             className={`${styles.frozenHeader} ${i >= bounds.c0 && i <= bounds.c1 ? styles.headerSelected : ""}`}
-            style={{ left: GUTTER_W + frozenX[i], width: f.width }}
+            style={{ left: gutterW + frozenX[i], width: scaled(f.width) }}
           >
             {f.title}
           </div>
         ))}
       </div>
 
-      <div className={styles.header} style={{ left: leftW, height: HEADER_H }} onScroll={resetScroll}>
+      <div className={styles.header} style={{ left: leftW, height: headerH }} onScroll={resetScroll}>
         <div style={{ transform: `translateX(${-scroll.left}px)`, position: "relative", height: "100%" }}>
           {headers}
         </div>
@@ -980,7 +1092,7 @@ export default function Grid({ panel, frozen }: Props) {
 
       <div
         className={styles.left}
-        style={{ top: HEADER_H, width: leftW }}
+        style={{ top: headerH, width: leftW }}
         onWheel={onWheelFrozen}
         onScroll={resetScroll}
       >
@@ -988,7 +1100,7 @@ export default function Grid({ panel, frozen }: Props) {
           {leftCells}
           <button
             className={styles.addRow}
-            style={{ top: N * ROW_H, width: leftW }}
+            style={{ top: N * rowH, width: leftW }}
             onClick={() => void useStore.getState().addRow(panel)}
           >
             + Добавить строку
@@ -1001,14 +1113,14 @@ export default function Grid({ panel, frozen }: Props) {
         </div>
       </div>
 
-      <div ref={bodyRef} className={styles.body} style={{ left: leftW, top: HEADER_H }} onScroll={onScroll}>
+      <div ref={bodyRef} className={styles.body} style={{ left: leftW, top: headerH }} onScroll={onScroll}>
         <div
           className={styles.bodyInner}
           style={{
-            width: D * COL_W,
+            width: D * colW,
             height: contentH,
-            backgroundSize: `${COL_W}px ${ROW_H}px`,
-            ["--rows-h" as string]: `${N * ROW_H}px`,
+            backgroundSize: `${colW}px ${rowH}px`,
+            ["--rows-h" as string]: `${N * rowH}px`,
           }}
         >
           {columnDecor}
@@ -1020,7 +1132,7 @@ export default function Grid({ panel, frozen }: Props) {
           {hasRows && bounds.c1 >= K && !editing && (
             <div
               className={styles.fillHandle}
-              style={{ left: (bounds.c1 - K + 1) * COL_W - 4, top: (bounds.r1 + 1) * ROW_H - 4 }}
+              style={{ left: (bounds.c1 - K + 1) * colW - 4, top: (bounds.r1 + 1) * rowH - 4 }}
               onMouseDown={onFillHandleDown}
             />
           )}
@@ -1029,6 +1141,23 @@ export default function Grid({ panel, frozen }: Props) {
       </div>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
+      {noteEdit && rowIds[noteEdit.r] && noteEdit.c >= K && (
+        <CommentBox
+          x={noteEdit.x}
+          y={noteEdit.y}
+          initial={cells.get(cellKey(rowIds[noteEdit.r], days[noteEdit.c - K]))?.comment ?? ""}
+          onClose={() => setNoteEdit(null)}
+          onSave={(comment) => {
+            applyEdits([{ rowId: rowIds[noteEdit.r], col: colKey(noteEdit.c), comment }]);
+            setNoteEdit(null);
+          }}
+        />
+      )}
+      {tip && !noteEdit && (
+        <div className={styles.tip} style={{ left: tip.x, top: tip.y }}>
+          {tip.text}
+        </div>
+      )}
     </div>
   );
 }

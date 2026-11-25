@@ -70,17 +70,20 @@ function escapeHtml(s: string): string {
 }
 
 /** HTML-таблица нужна, чтобы при вставке в Excel/Sheets сохранялась заливка. */
-export function toHtmlTable(values: string[][], bgs: (string | null)[][]): string {
+export function toHtmlTable(values: string[][], bgs: (string | null)[][], fgs: (string | null)[][]): string {
   const body = values
-    .map(
-      (row, r) =>
-        `<tr>${row
-          .map((v, c) => {
-            const bg = bgs[r]?.[c];
-            return `<td${bg ? ` style="background-color:${bg}"` : ""}>${escapeHtml(v)}</td>`;
-          })
-          .join("")}</tr>`,
-    )
+    .map((row, r) => {
+      const cells = row.map((v, c) => {
+        const style = [
+          bgs[r]?.[c] ? `background-color:${bgs[r][c]}` : "",
+          fgs[r]?.[c] ? `color:${fgs[r][c]}` : "",
+        ]
+          .filter(Boolean)
+          .join(";");
+        return `<td${style ? ` style="${style}"` : ""}>${escapeHtml(v)}</td>`;
+      });
+      return `<tr>${cells.join("")}</tr>`;
+    })
     .join("");
   return `<table>${body}</table>`;
 }

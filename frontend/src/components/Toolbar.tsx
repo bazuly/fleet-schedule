@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { api, tokenStore } from "@/lib/api";
 import { todayIso } from "@/lib/dates";
-import { colDay, isDayCol, scrollBus, useStore } from "@/lib/store";
+import { colDay, isDayCol, scrollBus, useStore, ZOOMS } from "@/lib/store";
 import styles from "./Toolbar.module.css";
 
 const PALETTE = [
@@ -32,6 +32,9 @@ export default function Toolbar({ visible, onToggle }: Props) {
   const canUndo = useStore((s) => s.undoStack.length > 0);
   const canRedo = useStore((s) => s.redoStack.length > 0);
   const syncScroll = useStore((s) => s.syncScroll);
+  const zoom = useStore((s) => s.zoom);
+  const [zoomMenu, setZoomMenu] = useState<{ x: number; y: number } | null>(null);
+  const zoomBtnRef = useRef<HTMLButtonElement>(null);
   const [palette, setPalette] = useState<{ x: number; y: number } | null>(null);
   const paletteRef = useRef<HTMLDivElement>(null);
   const paletteOpen = palette !== null;
@@ -42,13 +45,38 @@ export default function Toolbar({ visible, onToggle }: Props) {
   };
 
   useEffect(() => {
-    if (!paletteOpen) return;
+    const saved = Number(localStorage.getItem("fleet.zoom"));
+    if (ZOOMS.includes(saved)) useStore.getState().setZoom(saved);
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+      if ((e.target as HTMLElement | null)?.closest("input, textarea")) return;
+      if (e.key === "=" || e.key === "+") {
+        e.preventDefault();
+        useStore.getState().stepZoom(1);
+      } else if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        useStore.getState().stepZoom(-1);
+      } else if (e.key === "0") {
+        e.preventDefault();
+        useStore.getState().setZoom(1);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  useEffect(() => {
+    if (!paletteOpen && !zoomMenu) return;
     const close = (e: MouseEvent) => {
-      if (!paletteRef.current?.contains(e.target as Node)) setPalette(null);
+      const node = e.target as Node;
+      if (paletteOpen && !paletteRef.current?.contains(node)) setPalette(null);
+      if (zoomMenu && !zoomBtnRef.current?.contains(node) && !(e.target as HTMLElement).closest("[data-zoom-menu]")) {
+        setZoomMenu(null);
+      }
     };
     window.addEventListener("mousedown", close);
     return () => window.removeEventListener("mousedown", close);
-  }, [paletteOpen]);
+  }, [paletteOpen, zoomMenu]);
 
   const logout = async () => {
     try {
@@ -107,6 +135,34 @@ export default function Toolbar({ visible, onToggle }: Props) {
         <button onMouseDown={keepFocus} onClick={() => scrollBus.scrollToDay(todayIso())}>
           Сегодня
         </button>
+        <button
+          ref={zoomBtnRef}
+          onMouseDown={keepFocus}
+          title="Масштаб. Ctrl+колесо, Ctrl+плюс или Ctrl+минус"
+          onClick={() => {
+            if (zoomMenu) return setZoomMenu(null);
+            const rect = zoomBtnRef.current?.getBoundingClientRect();
+            setZoomMenu(rect ? { x: rect.left, y: rect.bottom + 6 } : { x: 0, y: 0 });
+          }}
+        >
+          {Math.round(zoom * 100)}%
+        </button>
+        {zoomMenu && (
+          <div className={styles.zoomMenu} style={{ left: zoomMenu.x, top: zoomMenu.y }} data-zoom-menu onMouseDown={keepFocus}>
+            {ZOOMS.map((z) => (
+              <button
+                key={z}
+                className={z === zoom ? styles.toggleOn : ""}
+                onClick={() => {
+                  useStore.getState().setZoom(z);
+                  setZoomMenu(null);
+                }}
+              >
+                {Math.round(z * 100)}%
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className={styles.group}>
@@ -124,7 +180,7 @@ export default function Toolbar({ visible, onToggle }: Props) {
         >
           Заборы продукции
         </button>
-        <label className={styles.checkbox} title="Окна прокручиваются по датам вместе с графиком">
+        <label className={styles.checkbox} title="Окна следуют за прокруткой основного графика. Их собственная прокрутка график не сдвигает">
           <input
             type="checkbox"
             checked={syncScroll}

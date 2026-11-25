@@ -1,4 +1,5 @@
 .env
+.import/
 .DS_Store
 reference-sheet.csv
 

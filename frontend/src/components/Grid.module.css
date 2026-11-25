@@ -6,9 +6,9 @@
   background: #fff;
   font-size: 13px;
   user-select: none;
-  --grid-line: #e2e3e3;
+  --grid-line: #000;
   --header-bg: #f8f9fa;
-  --header-line: #c7c7c7;
+  --header-line: #000;
   --accent: #1a73e8;
 }
 
@@ -32,7 +32,7 @@
   z-index: 4;
   background: var(--header-bg);
   border-bottom: 1px solid var(--header-line);
-  border-right: 2px solid #bdc1c6;
+  border-right: 2px solid #000;
   box-sizing: border-box;
 }
 
@@ -50,6 +50,8 @@
   bottom: 0;
   display: flex;
   align-items: center;
+  justify-content: center;
+  text-align: center;
   padding: 0 6px;
   font-weight: 600;
   color: #3c4043;
@@ -90,7 +92,7 @@
 }
 
 .dayWeekday {
-  font-size: 11px;
+  font-size: 0.85em;
   color: #5f6368;
 }
 
@@ -104,7 +106,7 @@
 }
 
 .monthStart {
-  border-left: 2px solid #80868b;
+  border-left: 2px solid #000;
 }
 
 .headerSelected {
@@ -118,7 +120,7 @@
   bottom: 0;
   overflow: hidden;
   background: #fff;
-  border-right: 2px solid #bdc1c6;
+  border-right: 2px solid #000;
   box-sizing: border-box;
   z-index: 2;
 }
@@ -126,13 +128,12 @@
 .gutter {
   position: absolute;
   left: 0;
-  width: 38px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--header-bg);
   color: #5f6368;
-  font-size: 11px;
+  font-size: 0.85em;
   border-right: 1px solid var(--header-line);
   border-bottom: 1px solid var(--grid-line);
   box-sizing: border-box;
@@ -140,15 +141,26 @@
 
 .frozenCell {
   position: absolute;
-  padding: 0 6px;
-  line-height: 21px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
   border-right: 1px solid var(--grid-line);
   border-bottom: 1px solid var(--grid-line);
   box-sizing: border-box;
   color: #202124;
+  overflow: hidden;
+}
+
+.frozenCell span {
+  min-width: 0;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  text-align: center;
+  line-height: 1.25;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .addRow {
@@ -212,24 +224,59 @@
 
 .monthLine {
   width: 2px;
-  background: #9aa0a6;
+  background: #000;
   z-index: 1;
 }
 
 .cell {
   position: absolute;
-  width: 115px;
-  height: 21px;
+  overflow: visible;
+}
+
+.noteMark {
+  position: absolute;
+  top: 0;
+  right: 0;
+  border-top: 9px solid #e37400;
+  border-left: 9px solid transparent;
+  z-index: 2;
+  pointer-events: none;
 }
 
 .cellText {
   position: absolute;
-  left: 3px;
-  top: 0;
-  line-height: 21px;
-  white-space: nowrap;
+  left: 2px;
+  top: 2px;
+  display: grid;
+  place-items: center;
+  line-height: 1.2;
+  font-weight: 600;
   overflow: hidden;
   color: #202124;
+  pointer-events: none;
+}
+
+.cellText > span {
+  min-width: 0;
+  max-height: 100%;
+  overflow: hidden;
+  text-align: center;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tip {
+  position: fixed;
+  z-index: 3000;
+  max-width: 320px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #fff8e1;
+  border: 1px solid #f9cb9c;
+  box-shadow: 0 4px 14px rgba(60, 64, 67, 0.28);
+  font-size: 13px;
+  line-height: 1.35;
+  white-space: pre-wrap;
   pointer-events: none;
 }
 
@@ -298,7 +345,8 @@
   box-shadow: 0 2px 6px rgba(60, 64, 67, 0.3);
   padding: 1px 3px;
   font: inherit;
-  line-height: 17px;
+  line-height: 1.25;
+  text-align: center;
   resize: none;
   outline: none;
   overflow: hidden;

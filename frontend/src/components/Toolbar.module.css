@@ -89,6 +89,22 @@
   outline: 2px solid #1a73e8;
 }
 
+.zoomMenu {
+  position: fixed;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  min-width: 88px;
+  padding: 6px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(60, 64, 67, 0.3);
+}
+
+.zoomMenu button {
+  justify-content: flex-end;
+}
+
 .palette .noFill {
   grid-column: 1 / -1;
   justify-content: center;

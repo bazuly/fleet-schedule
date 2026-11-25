@@ -20,7 +20,13 @@ pub struct Cell {
     pub row_id: Uuid,
     pub day: NaiveDate,
     pub value: String,
+    #[serde(default)]
     pub bg: Option<String>,
+    /// Цвет текста. Пусто — обычный чёрный.
+    #[serde(default)]
+    pub fg: Option<String>,
+    #[serde(default)]
+    pub comment: String,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
