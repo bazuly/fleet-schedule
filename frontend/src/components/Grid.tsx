@@ -363,6 +363,38 @@ export default function Grid({ panel, frozen }: Props) {
     s.select();
   }, []);
 
+  useEffect(() => {
+    return scrollBus.subscribeCell((target) => {
+      if (target.panel !== panel || N === 0) return;
+      const r = rowIds.indexOf(target.rowId);
+      const dayIndex = days.indexOf(target.day);
+      if (r < 0 || dayIndex < 0) return;
+      const c = K + dayIndex;
+      const block = blockAt(r, c);
+      setSel({ anchor: { r, c: block.c0 }, focus: { r, c: block.c1 } });
+      setFocused(true);
+      const anchorCol = colKey(block.c0);
+      useStore.getState().setActive({
+        gridId: panel,
+        rowIds: [rowIds[r]],
+        colKeys: [anchorCol],
+        anchorRowId: rowIds[r],
+        anchorCol,
+      });
+      const el = bodyRef.current;
+      if (el) {
+        const top = Math.min(Math.max(0, r * rowH - rowH), Math.max(0, el.scrollHeight - el.clientHeight));
+        const left = Math.min(dayIndex * colW, Math.max(0, el.scrollWidth - el.clientWidth));
+        if (Math.abs(el.scrollTop - top) >= 1 || Math.abs(el.scrollLeft - left) >= 1) {
+          suppressSyncRef.current = true;
+          el.scrollTop = top;
+          el.scrollLeft = left;
+        }
+      }
+      focusSink();
+    });
+  }, [panel, N, rowIds, days, K, rowH, colW, blockAt, colKey, focusSink]);
+
   const select = useCallback(
     (anchor: Pos, focus: Pos = anchor, scrollTo: Pos = focus) => {
       if (anchor.r === focus.r && anchor.c === focus.c) {

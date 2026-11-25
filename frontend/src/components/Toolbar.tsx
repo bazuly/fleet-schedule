@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, tokenStore } from "@/lib/api";
 import { todayIso } from "@/lib/dates";
 import { isRecentOverdue, pendingDayLabel, pendingTasks, type PendingTask } from "@/lib/pending";
+import { unnotifiedLabel, unnotifiedTrips, type UnnotifiedTrip } from "@/lib/unnotified";
 import { colDay, isDayCol, scrollBus, useStore, ZOOMS } from "@/lib/store";
 import ThemeButton from "./ThemeButton";
 import styles from "./Toolbar.module.css";
@@ -56,14 +57,20 @@ export default function Toolbar({ visible, onToggle }: Props) {
   const [bellOpen, setBellOpen] = useState(false);
   const [bellBox, setBellBox] = useState<{ left: number; top: number } | null>(null);
   const bellRef = useRef<HTMLDivElement>(null);
+  const [phoneOpen, setPhoneOpen] = useState(false);
+  const [phoneBox, setPhoneBox] = useState<{ left: number; top: number } | null>(null);
+  const phoneRef = useRef<HTMLDivElement>(null);
   const rows = useStore((s) => s.rows);
   const cells = useStore((s) => s.cells);
   const today = todayIso();
   const pending = useMemo(() => pendingTasks(rows, cells, today), [rows, cells, today]);
   const attention = pending.filter((task) => task.bucket !== "overdue" || isRecentOverdue(task, today)).length;
   const badgeCount = attention || pending.length;
+  const calls = useMemo(() => unnotifiedTrips(rows, cells, today), [rows, cells, today]);
   const active = useStore((s) => s.active);
-  const canMerge = (active?.colKeys.filter(isDayCol).length ?? 0) > 1;
+  const dayCols = active?.colKeys.filter(isDayCol).length ?? 0;
+  const canMerge = dayCols > 1;
+  const canNotify = dayCols > 0;
   const paletteOpen = palette !== null;
   const setPaletteOpen = (open: boolean) => {
     if (!open) return setPalette(null);
@@ -93,19 +100,20 @@ export default function Toolbar({ visible, onToggle }: Props) {
   }, []);
 
   useEffect(() => {
-    if (!paletteOpen && !zoomMenu && !fontMenu && !bellOpen) return;
+    if (!paletteOpen && !zoomMenu && !fontMenu && !bellOpen && !phoneOpen) return;
     const close = (e: MouseEvent) => {
       const node = e.target as Node;
       if (paletteOpen && !paletteRef.current?.contains(node)) setPalette(null);
       if (fontMenu && !fontRef.current?.contains(node)) setFontMenu(null);
       if (bellOpen && !bellRef.current?.contains(node)) setBellOpen(false);
+      if (phoneOpen && !phoneRef.current?.contains(node)) setPhoneOpen(false);
       if (zoomMenu && !zoomBtnRef.current?.contains(node) && !(e.target as HTMLElement).closest("[data-zoom-menu]")) {
         setZoomMenu(null);
       }
     };
     window.addEventListener("mousedown", close);
     return () => window.removeEventListener("mousedown", close);
-  }, [paletteOpen, zoomMenu, fontMenu, bellOpen]);
+  }, [paletteOpen, zoomMenu, fontMenu, bellOpen, phoneOpen]);
 
   const logout = async () => {
     try {
@@ -117,39 +125,71 @@ export default function Toolbar({ visible, onToggle }: Props) {
 
   return (
     <div className={styles.toolbar}>
-      {pending.length > 0 && (
+      {(pending.length > 0 || calls.length > 0) && (
         <div className={styles.group}>
-          <div className={styles.bellWrap} ref={bellRef}>
-            <button
-              onMouseDown={keepFocus}
-              className={styles.bell}
-              title="Не запланировано: сегодня, завтра и просроченные"
-              onClick={() => {
-                const rect = bellRef.current?.getBoundingClientRect();
-                if (rect) {
-                  const menuW = Math.min(320, window.innerWidth - 16);
-                  setBellBox({
-                    left: Math.max(8, Math.min(rect.left, window.innerWidth - menuW - 8)),
-                    top: rect.bottom + 6,
-                  });
-                }
-                setBellOpen((v) => !v);
-              }}
-            >
-              <span aria-hidden>🔔</span>
-              <span className={styles.badge}>{badgeCount > 99 ? "99+" : badgeCount}</span>
-            </button>
-            {bellOpen && bellBox && (
-              <PendingMenu
-                tasks={pending}
-                today={today}
-                box={bellBox}
-                visible={visible}
-                onToggle={onToggle}
-                onClose={() => setBellOpen(false)}
-              />
-            )}
-          </div>
+          {pending.length > 0 && (
+            <div className={styles.bellWrap} ref={bellRef}>
+              <button
+                onMouseDown={keepFocus}
+                className={styles.bell}
+                title="Не запланировано: сегодня, завтра и просроченные"
+                onClick={() => {
+                  const rect = bellRef.current?.getBoundingClientRect();
+                  if (rect) {
+                    const menuW = Math.min(320, window.innerWidth - 16);
+                    setBellBox({
+                      left: Math.max(8, Math.min(rect.left, window.innerWidth - menuW - 8)),
+                      top: rect.bottom + 6,
+                    });
+                  }
+                  setPhoneOpen(false);
+                  setBellOpen((v) => !v);
+                }}
+              >
+                <span aria-hidden>🔔</span>
+                <span className={styles.badge}>{badgeCount > 99 ? "99+" : badgeCount}</span>
+              </button>
+              {bellOpen && bellBox && (
+                <PendingMenu
+                  tasks={pending}
+                  today={today}
+                  box={bellBox}
+                  visible={visible}
+                  onToggle={onToggle}
+                  onClose={() => setBellOpen(false)}
+                />
+              )}
+            </div>
+          )}
+          {calls.length > 0 && (
+            <div className={styles.bellWrap} ref={phoneRef}>
+              <button
+                onMouseDown={keepFocus}
+                className={styles.bell}
+                title="Не оповещены: сегодня и завтра"
+                onClick={() => {
+                  const rect = phoneRef.current?.getBoundingClientRect();
+                  if (rect) {
+                    const menuW = Math.min(320, window.innerWidth - 16);
+                    setPhoneBox({
+                      left: Math.max(8, Math.min(rect.left, window.innerWidth - menuW - 8)),
+                      top: rect.bottom + 6,
+                    });
+                  }
+                  setBellOpen(false);
+                  const next = !phoneOpen;
+                  setPhoneOpen(next);
+                  if (next && calls[0]) revealTrip(calls[0]);
+                }}
+              >
+                <span aria-hidden>📞</span>
+                <span className={styles.badge}>{calls.length > 99 ? "99+" : calls.length}</span>
+              </button>
+              {phoneOpen && phoneBox && (
+                <CallMenu trips={calls} today={today} box={phoneBox} onClose={() => setPhoneOpen(false)} />
+              )}
+            </div>
+          )}
         </div>
       )}
       <div className={styles.group}>
@@ -162,8 +202,9 @@ export default function Toolbar({ visible, onToggle }: Props) {
       </div>
 
       <div className={styles.group} ref={paletteRef}>
-        <button onMouseDown={keepFocus} onClick={() => setPaletteOpen(!paletteOpen)} title="Цвет заливки">
-          <span className={styles.fillIcon}>🪣</span> Заливка ▾
+        <button onMouseDown={keepFocus} onClick={() => setPaletteOpen(!paletteOpen)} title="Цвет заливки" aria-label="Цвет заливки">
+          <span className={styles.fillIcon} aria-hidden>🪣</span>
+          <span aria-hidden>▾</span>
         </button>
         {palette && (
           <div className={styles.palette} style={{ left: palette.x, top: palette.y }} onMouseDown={keepFocus}>
@@ -196,13 +237,15 @@ export default function Toolbar({ visible, onToggle }: Props) {
         <button
           onMouseDown={keepFocus}
           title="Цвет шрифта"
+          aria-label="Цвет шрифта"
           onClick={() => {
             if (fontMenu) return setFontMenu(null);
             const rect = fontRef.current?.getBoundingClientRect();
             setFontMenu(rect ? placeMenu(rect, 188) : { x: 8, y: 0 });
           }}
         >
-          <span className={styles.fontIcon}>А</span> Шрифт ▾
+          <span className={styles.fontIcon} aria-hidden>А</span>
+          <span aria-hidden>▾</span>
         </button>
         {fontMenu && (
           <div className={styles.palette} style={{ left: fontMenu.x, top: fontMenu.y }} onMouseDown={keepFocus}>
@@ -229,6 +272,14 @@ export default function Toolbar({ visible, onToggle }: Props) {
             </button>
           </div>
         )}
+        <button
+          onMouseDown={keepFocus}
+          disabled={!canNotify}
+          title="Пометить водителя оповещённым: жёлтый текст"
+          onClick={() => useStore.getState().applyFgToActive("#ffff00")}
+        >
+          Оповещен
+        </button>
       </div>
 
       <div className={styles.group}>
@@ -318,6 +369,47 @@ export default function Toolbar({ visible, onToggle }: Props) {
         )}
         <button onClick={logout}>Выйти</button>
       </div>
+    </div>
+  );
+}
+
+function revealTrip(trip: UnnotifiedTrip) {
+  scrollBus.revealCell({ panel: "main", rowId: trip.rowId, day: trip.days[0] });
+}
+
+function CallMenu({
+  trips,
+  today,
+  box,
+  onClose,
+}: {
+  trips: UnnotifiedTrip[];
+  today: string;
+  box: { left: number; top: number };
+  onClose(): void;
+}) {
+  const open = (trip: UnnotifiedTrip) => {
+    revealTrip(trip);
+    onClose();
+  };
+  return (
+    <div className={styles.pendingMenu} style={{ left: box.left, top: box.top }}>
+      <div className={styles.pendingHead}>Не оповещены</div>
+      {(["today", "tomorrow"] as const).map((bucket) => {
+        const list = trips.filter((trip) => trip.bucket === bucket);
+        if (!list.length) return null;
+        return (
+          <div key={bucket}>
+            <div className={styles.pendingSection}>{bucket === "today" ? "Сегодня" : "Завтра"}</div>
+            {list.map((trip) => (
+              <button key={`${trip.rowId}|${trip.anchor}`} onClick={() => open(trip)}>
+                <span className={styles.pendingWhen}>{unnotifiedLabel(trip, today)}</span>
+                <span className={styles.pendingText}>{trip.value}</span>
+              </button>
+            ))}
+          </div>
+        );
+      })}
     </div>
   );
 }
