@@ -1,0 +1,1034 @@
+"use client";
+
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { Panel, RowField } from "@/lib/api";
+import { parseTsv, toHtmlTable, toTsv } from "@/lib/clipboard";
+import { daysBetween, formatDayHeader, isFirstOfMonth, todayIso } from "@/lib/dates";
+import {
+  cellKey,
+  dayCol,
+  fieldCol,
+  scrollBus,
+  sortedRowIds,
+  useStore,
+  type ColKey,
+  type Edit,
+} from "@/lib/store";
+import ContextMenu, { type MenuItem } from "./ContextMenu";
+import styles from "./Grid.module.css";
+
+export interface FrozenCol {
+  field: RowField;
+  title: string;
+  width: number;
+}
+
+interface Props {
+  panel: Panel;
+  frozen: FrozenCol[];
+}
+
+export const ROW_H = 22;
+export const COL_W = 116;
+const HEADER_H = 38;
+const GUTTER_W = 38;
+const MAX_SPILL = 8;
+const OVERSCAN = 3;
+
+type Pos = { r: number; c: number };
+type Sel = { anchor: Pos; focus: Pos };
+type Editing = { r: number; c: number; value: string; mode: "quick" | "full" };
+type Drag = { kind: "select" } | { kind: "fill"; target: Pos };
+
+/** Браузер прокручивает overflow:hidden-контейнеры, показывая фокусный элемент, и панели разъезжаются. */
+function resetScroll(e: React.UIEvent<HTMLElement>) {
+  const el = e.currentTarget;
+  if (el.scrollTop || el.scrollLeft) {
+    el.scrollTop = 0;
+    el.scrollLeft = 0;
+  }
+}
+
+export default function Grid({ panel, frozen }: Props) {
+  const rows = useStore((s) => s.rows);
+  const cells = useStore((s) => s.cells);
+  const range = useStore((s) => s.range);
+  const clipboard = useStore((s) => s.clipboard);
+  const applyEdits = useStore((s) => s.applyEdits);
+
+  const rowIds = useMemo(() => sortedRowIds(rows, panel), [rows, panel]);
+  const days = useMemo(() => daysBetween(range.from, range.to), [range]);
+  const today = todayIso();
+  const todayIdx = days.indexOf(today);
+
+  const K = frozen.length;
+  const N = rowIds.length;
+  const D = days.length;
+  const C = K + D;
+  const frozenX = useMemo(() => {
+    const xs: number[] = [];
+    let x = 0;
+    for (const f of frozen) {
+      xs.push(x);
+      x += f.width;
+    }
+    xs.push(x);
+    return xs;
+  }, [frozen]);
+  const frozenW = frozenX[K];
+  const leftW = GUTTER_W + frozenW;
+
+  const rootRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const sinkRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+
+  const [rawSel, setSel] = useState<Sel>(() => {
+    const start = { r: 0, c: K + Math.max(0, todayIdx) };
+    return { anchor: start, focus: start };
+  });
+  const [editing, setEditingState] = useState<Editing | null>(null);
+  const editingRef = useRef<Editing | null>(null);
+  const setEditing = useCallback((e: Editing | null) => {
+    editingRef.current = e;
+    setEditingState(e);
+  }, []);
+  const [scroll, setScroll] = useState({ top: 0, left: 0 });
+  const [viewport, setViewport] = useState({ w: 1200, h: 600 });
+  const [drag, setDrag] = useState<Drag | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [focused, setFocused] = useState(false);
+  const suppressSyncRef = useRef(false);
+
+  const colKey = useCallback(
+    (c: number): ColKey => (c < K ? fieldCol(frozen[c].field) : dayCol(days[c - K])),
+    [K, frozen, days],
+  );
+
+  const valueAt = useCallback(
+    (r: number, c: number): string => {
+      const id = rowIds[r];
+      if (!id) return "";
+      if (c < K) return rows[id]?.[frozen[c].field] ?? "";
+      return cells.get(cellKey(id, days[c - K]))?.value ?? "";
+    },
+    [rowIds, rows, cells, days, K, frozen],
+  );
+
+  const bgAt = useCallback(
+    (r: number, c: number): string | null => {
+      if (c < K) return null;
+      const id = rowIds[r];
+      return id ? (cells.get(cellKey(id, days[c - K]))?.bg ?? null) : null;
+    },
+    [rowIds, cells, days, K],
+  );
+
+  // Строки и диапазон дат могут измениться извне — держим выделение в пределах таблицы.
+  const sel = useMemo<Sel>(() => {
+    const clamp = (p: Pos): Pos => ({
+      r: Math.max(0, Math.min(N - 1, p.r)),
+      c: Math.max(0, Math.min(C - 1, p.c)),
+    });
+    return { anchor: clamp(rawSel.anchor), focus: clamp(rawSel.focus) };
+  }, [rawSel, N, C]);
+
+  const bounds = useMemo(
+    () => ({
+      r0: Math.min(sel.anchor.r, sel.focus.r),
+      r1: Math.max(sel.anchor.r, sel.focus.r),
+      c0: Math.min(sel.anchor.c, sel.focus.c),
+      c1: Math.max(sel.anchor.c, sel.focus.c),
+    }),
+    [sel],
+  );
+
+  // Сообщаем выделение в общее хранилище — его используют строка формул и заливка.
+  const setActive = useStore((s) => s.setActive);
+  useEffect(() => {
+    if (!focused || N === 0) return;
+    const ids = rowIds.slice(bounds.r0, bounds.r1 + 1);
+    const cols: ColKey[] = [];
+    for (let c = bounds.c0; c <= bounds.c1; c++) cols.push(colKey(c));
+    setActive({
+      gridId: panel,
+      rowIds: ids,
+      colKeys: cols,
+      anchorRowId: rowIds[sel.anchor.r],
+      anchorCol: colKey(sel.anchor.c),
+    });
+  }, [focused, bounds, sel.anchor, rowIds, colKey, panel, setActive, N]);
+
+  // ---------- Прокрутка и размеры ----------
+
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setViewport({ w: el.clientWidth, h: el.clientHeight }));
+    ro.observe(el);
+    setViewport({ w: el.clientWidth, h: el.clientHeight });
+    return () => ro.disconnect();
+  }, []);
+
+  const onScroll = () => {
+    const el = bodyRef.current!;
+    setScroll({ top: el.scrollTop, left: el.scrollLeft });
+    if (suppressSyncRef.current) {
+      suppressSyncRef.current = false;
+      return;
+    }
+    if (useStore.getState().syncScroll) scrollBus.emit(panel, el.scrollLeft);
+  };
+
+  useEffect(
+    () =>
+      scrollBus.subscribe((source, left) => {
+        const el = bodyRef.current;
+        if (!el || source === panel || Math.abs(el.scrollLeft - left) < 1) return;
+        suppressSyncRef.current = true;
+        el.scrollLeft = left;
+      }),
+    [panel],
+  );
+
+  const scrollToDay = useCallback(
+    (day: string) => {
+      const el = bodyRef.current;
+      const idx = days.indexOf(day);
+      if (!el || idx < 0) return;
+      suppressSyncRef.current = true;
+      el.scrollLeft = Math.max(0, (idx - 2) * COL_W);
+    },
+    [days],
+  );
+  useEffect(() => scrollBus.subscribeDay(scrollToDay), [scrollToDay]);
+
+  const initialScrollDone = useRef(false);
+  useEffect(() => {
+    if (initialScrollDone.current || todayIdx < 0) return;
+    initialScrollDone.current = true;
+    scrollToDay(today);
+  }, [todayIdx, today, scrollToDay]);
+
+  const ensureVisible = useCallback(
+    (p: Pos) => {
+      const el = bodyRef.current;
+      if (!el) return;
+      const y = p.r * ROW_H;
+      if (y < el.scrollTop) el.scrollTop = y;
+      else if (y + ROW_H > el.scrollTop + el.clientHeight) el.scrollTop = y + ROW_H - el.clientHeight;
+      if (p.c >= K) {
+        const x = (p.c - K) * COL_W;
+        if (x < el.scrollLeft) el.scrollLeft = x;
+        else if (x + COL_W > el.scrollLeft + el.clientWidth) el.scrollLeft = x + COL_W - el.clientWidth;
+      }
+    },
+    [K],
+  );
+
+  // ---------- Выделение и навигация ----------
+
+  const focusSink = useCallback(() => {
+    const s = sinkRef.current;
+    if (!s) return;
+    s.value = " ";
+    s.focus({ preventScroll: true });
+    s.select();
+  }, []);
+
+  const select = useCallback(
+    (anchor: Pos, focus: Pos = anchor, scrollTo: Pos = focus) => {
+      setSel({ anchor, focus });
+      ensureVisible(scrollTo);
+    },
+    [ensureVisible],
+  );
+
+  const clampPos = useCallback(
+    (p: Pos): Pos => ({
+      r: Math.max(0, Math.min(N - 1, p.r)),
+      c: Math.max(0, Math.min(C - 1, p.c)),
+    }),
+    [N, C],
+  );
+
+  const isEmpty = useCallback((r: number, c: number) => valueAt(r, c) === "", [valueAt]);
+
+  /** Ctrl+стрелка: прыжок к краю блока данных, как в Excel. */
+  const jump = useCallback(
+    (from: Pos, dr: number, dc: number): Pos => {
+      const inside = (p: Pos) => p.r >= 0 && p.r < N && p.c >= 0 && p.c < C;
+      let p = { ...from };
+      const next = () => ({ r: p.r + dr, c: p.c + dc });
+      if (!inside(next())) return p;
+      if (!isEmpty(p.r, p.c) && !isEmpty(next().r, next().c)) {
+        while (inside(next()) && !isEmpty(next().r, next().c)) p = next();
+        return p;
+      }
+      p = next();
+      while (inside(p) && isEmpty(p.r, p.c) && inside(next())) p = next();
+      return p;
+    },
+    [N, C, isEmpty],
+  );
+
+  const move = useCallback(
+    (dr: number, dc: number, extend = false, toEdge = false) => {
+      if (N === 0) return;
+      const from = extend ? sel.focus : sel.anchor;
+      const target = clampPos(toEdge ? jump(from, dr, dc) : { r: from.r + dr, c: from.c + dc });
+      if (extend) select(sel.anchor, target);
+      else select(target);
+    },
+    [N, sel, clampPos, jump, select],
+  );
+
+  // ---------- Редактирование ----------
+
+  const startEdit = useCallback(
+    (mode: "quick" | "full", initial?: string) => {
+      if (N === 0) return;
+      const { r, c } = sel.anchor;
+      ensureVisible(sel.anchor);
+      setEditing({ r, c, mode, value: initial ?? valueAt(r, c) });
+    },
+    [N, sel.anchor, valueAt, ensureVisible, setEditing],
+  );
+
+  useEffect(() => {
+    if (!editing) return;
+    const el = editorRef.current;
+    if (el && document.activeElement !== el) {
+      el.focus({ preventScroll: true });
+      const end = el.value.length;
+      el.setSelectionRange(end, end);
+    }
+  }, [editing]);
+
+  const commitEdit = useCallback(
+    (dr = 0, dc = 0) => {
+      const e = editingRef.current;
+      if (!e) return;
+      setEditing(null);
+      const rowId = rowIds[e.r];
+      if (rowId) applyEdits([{ rowId, col: colKey(e.c), value: e.value }]);
+      focusSink();
+      if (dr || dc) {
+        const target = clampPos({ r: e.r + dr, c: e.c + dc });
+        select(target);
+      }
+    },
+    [rowIds, colKey, applyEdits, focusSink, clampPos, select, setEditing],
+  );
+
+  const cancelEdit = useCallback(() => {
+    setEditing(null);
+    focusSink();
+  }, [focusSink, setEditing]);
+
+  // ---------- Буфер обмена ----------
+
+  const selectionMatrix = useCallback(() => {
+    const values: string[][] = [];
+    const bgs: (string | null)[][] = [];
+    for (let r = bounds.r0; r <= bounds.r1; r++) {
+      const vr: string[] = [];
+      const br: (string | null)[] = [];
+      for (let c = bounds.c0; c <= bounds.c1; c++) {
+        vr.push(valueAt(r, c));
+        br.push(bgAt(r, c));
+      }
+      values.push(vr);
+      bgs.push(br);
+    }
+    return { values, bgs };
+  }, [bounds, valueAt, bgAt]);
+
+  const doCopy = useCallback(
+    (cut: boolean, dt?: DataTransfer | null) => {
+      if (N === 0) return;
+      const { values, bgs } = selectionMatrix();
+      const tsv = toTsv(values);
+      if (dt) {
+        dt.setData("text/plain", tsv);
+        dt.setData("text/html", toHtmlTable(values, bgs));
+      } else {
+        void navigator.clipboard?.writeText(tsv).catch(() => {});
+      }
+      const cols: ColKey[] = [];
+      for (let c = bounds.c0; c <= bounds.c1; c++) cols.push(colKey(c));
+      useStore.getState().setClipboard({
+        tsv,
+        values,
+        bgs,
+        cut: cut
+          ? { gridId: panel, rowIds: rowIds.slice(bounds.r0, bounds.r1 + 1), colKeys: cols }
+          : undefined,
+      });
+    },
+    [N, selectionMatrix, bounds, colKey, panel, rowIds],
+  );
+
+  const doPaste = useCallback(
+    (text: string) => {
+      if (N === 0) return;
+      const clip = useStore.getState().clipboard;
+      const normalized = text.replace(/\r\n?/g, "\n");
+      const internal = clip && clip.tsv === normalized ? clip : null;
+      const values = internal ? internal.values : parseTsv(normalized);
+      const bgs = internal ? internal.bgs : null;
+      if (!values.length || !values[0].length) return;
+
+      const h = values.length;
+      const w = Math.max(...values.map((r) => r.length));
+      // Одиночное значение заполняет всё выделение — как в Excel.
+      const single = h === 1 && w === 1;
+      const r0 = bounds.r0;
+      const c0 = bounds.c0;
+      const r1 = single ? bounds.r1 : Math.min(N - 1, r0 + h - 1);
+      const c1 = single ? bounds.c1 : Math.min(C - 1, c0 + w - 1);
+
+      const target = new Map<string, Edit>();
+      for (let r = r0; r <= r1; r++) {
+        for (let c = c0; c <= c1; c++) {
+          const sr = single ? 0 : r - r0;
+          const sc = single ? 0 : c - c0;
+          const edit: Edit = { rowId: rowIds[r], col: colKey(c), value: values[sr]?.[sc] ?? "" };
+          if (bgs && c >= K) edit.bg = bgs[sr]?.[sc] ?? null;
+          target.set(`${edit.rowId}|${edit.col}`, edit);
+        }
+      }
+
+      const edits: Edit[] = [...target.values()];
+      if (internal?.cut) {
+        for (const rowId of internal.cut.rowIds)
+          for (const col of internal.cut.colKeys) {
+            const k = `${rowId}|${col}`;
+            if (!target.has(k)) edits.push({ rowId, col, value: "", bg: col.startsWith("d:") ? null : undefined });
+          }
+        useStore.getState().setClipboard(null);
+      }
+      applyEdits(edits);
+      select({ r: r0, c: c0 }, { r: r1, c: c1 }, { r: r0, c: c0 });
+    },
+    [N, C, K, bounds, rowIds, colKey, applyEdits, select],
+  );
+
+  const clearSelection = useCallback(
+    (what: "value" | "bg") => {
+      const edits: Edit[] = [];
+      for (let r = bounds.r0; r <= bounds.r1; r++)
+        for (let c = bounds.c0; c <= bounds.c1; c++) {
+          if (what === "value") edits.push({ rowId: rowIds[r], col: colKey(c), value: "" });
+          else if (c >= K) edits.push({ rowId: rowIds[r], col: colKey(c), bg: null });
+        }
+      applyEdits(edits);
+    },
+    [bounds, rowIds, colKey, applyEdits, K],
+  );
+
+  // ---------- Автозаполнение маркером ----------
+
+  const fillRect = useCallback(
+    (t: Pos) => {
+      const { r0, r1, c0, c1 } = bounds;
+      const down = t.r > r1 ? t.r - r1 : 0;
+      const up = t.r < r0 ? r0 - t.r : 0;
+      const right = t.c > c1 ? t.c - c1 : 0;
+      const left = t.c < c0 ? c0 - t.c : 0;
+      const vertical = Math.max(down, up) >= Math.max(right, left);
+      if (vertical) {
+        if (down) return { r0, r1: t.r, c0, c1, dir: "down" as const };
+        if (up) return { r0: t.r, r1, c0, c1, dir: "up" as const };
+      } else {
+        if (right) return { r0, r1, c0, c1: t.c, dir: "right" as const };
+        if (left) return { r0, r1, c0: t.c, c1, dir: "left" as const };
+      }
+      return null;
+    },
+    [bounds],
+  );
+
+  const applyFill = useCallback(
+    (t: Pos) => {
+      const rect = fillRect(t);
+      if (!rect) return;
+      const { r0, r1, c0, c1 } = bounds;
+      const h = r1 - r0 + 1;
+      const w = c1 - c0 + 1;
+      const mod = (a: number, n: number) => ((a % n) + n) % n;
+      const edits: Edit[] = [];
+      for (let r = rect.r0; r <= rect.r1; r++)
+        for (let c = rect.c0; c <= rect.c1; c++) {
+          if (r >= r0 && r <= r1 && c >= c0 && c <= c1) continue;
+          const sr = r0 + mod(r - r0, h);
+          const sc = c0 + mod(c - c0, w);
+          const edit: Edit = { rowId: rowIds[r], col: colKey(c), value: valueAt(sr, sc) };
+          if (c >= K && sc >= K) edit.bg = bgAt(sr, sc);
+          edits.push(edit);
+        }
+      applyEdits(edits);
+      setSel({ anchor: { r: rect.r0, c: rect.c0 }, focus: { r: rect.r1, c: rect.c1 } });
+    },
+    [fillRect, bounds, rowIds, colKey, valueAt, bgAt, applyEdits, K],
+  );
+
+  // ---------- Мышь ----------
+
+  const hitTest = useCallback(
+    (clientX: number, clientY: number): { r: number; c: number } => {
+      const body = bodyRef.current!.getBoundingClientRect();
+      const root = rootRef.current!.getBoundingClientRect();
+      const el = bodyRef.current!;
+      const r = clientY < body.top ? -1 : Math.floor((clientY - body.top + el.scrollTop) / ROW_H);
+      let c: number;
+      if (clientX < body.left) {
+        const x = clientX - root.left - GUTTER_W;
+        if (x < 0) c = -1;
+        else {
+          c = K - 1;
+          for (let i = 0; i < K; i++)
+            if (x < frozenX[i + 1]) {
+              c = i;
+              break;
+            }
+        }
+      } else {
+        c = K + Math.floor((clientX - body.left + el.scrollLeft) / COL_W);
+      }
+      return { r, c };
+    },
+    [K, frozenX],
+  );
+
+  const onMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0 && e.button !== 2) return;
+    const target = e.target as HTMLElement;
+    if (target === bodyRef.current) return; // клик по полосе прокрутки
+    if (target.closest("textarea, button, [data-no-grid]")) return;
+    if (N === 0) return;
+
+    if (editingRef.current) commitEdit();
+    e.preventDefault();
+    focusSink();
+
+    const hit = hitTest(e.clientX, e.clientY);
+    // Клик по заголовку дня — выделяем столбец, по номеру строки — строку целиком.
+    if (hit.r < 0 && hit.c < 0) {
+      select({ r: 0, c: 0 }, { r: N - 1, c: C - 1 }, { r: 0, c: K });
+      return;
+    }
+    if (hit.r < 0) {
+      const c = clampPos({ r: 0, c: hit.c }).c;
+      if (e.shiftKey) setSel((s) => ({ anchor: { r: 0, c: s.anchor.c }, focus: { r: N - 1, c } }));
+      else setSel({ anchor: { r: 0, c }, focus: { r: N - 1, c } });
+      return;
+    }
+    if (hit.c < 0) {
+      const r = clampPos({ r: hit.r, c: 0 }).r;
+      if (e.button === 2 && r >= bounds.r0 && r <= bounds.r1) return;
+      if (e.shiftKey) setSel((s) => ({ anchor: { r: s.anchor.r, c: 0 }, focus: { r, c: C - 1 } }));
+      else setSel({ anchor: { r, c: 0 }, focus: { r, c: C - 1 } });
+      return;
+    }
+    if (hit.r >= N) return;
+    const p = clampPos(hit);
+    if (e.button === 2) {
+      const inside = p.r >= bounds.r0 && p.r <= bounds.r1 && p.c >= bounds.c0 && p.c <= bounds.c1;
+      if (!inside) setSel({ anchor: p, focus: p });
+      return;
+    }
+    if (e.shiftKey) setSel((s) => ({ anchor: s.anchor, focus: p }));
+    else setSel({ anchor: p, focus: p });
+    setDrag({ kind: "select" });
+  };
+
+  const onFillHandleDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    focusSink();
+    setDrag({ kind: "fill", target: { r: bounds.r1, c: bounds.c1 } });
+  };
+
+  useEffect(() => {
+    if (!drag) return;
+    const onMove = (e: MouseEvent) => {
+      const el = bodyRef.current!;
+      const rect = el.getBoundingClientRect();
+      if (e.clientY > rect.bottom - 10) el.scrollTop += 20;
+      else if (e.clientY < rect.top + 10) el.scrollTop -= 20;
+      if (e.clientX > rect.right - 10) el.scrollLeft += 30;
+      else if (e.clientX < rect.left + 10 && el.scrollLeft > 0 && e.clientX > rect.left - 40) el.scrollLeft -= 30;
+
+      const p = clampPos(hitTest(e.clientX, e.clientY));
+      if (drag.kind === "select") setSel((s) => ({ anchor: s.anchor, focus: p }));
+      else setDrag({ kind: "fill", target: p });
+    };
+    const onUp = () => {
+      if (drag.kind === "fill") applyFill(drag.target);
+      setDrag(null);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [drag, hitTest, clampPos, applyFill]);
+
+  const onDoubleClick = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (target.closest("textarea, button, [data-no-grid]")) return;
+    const hit = hitTest(e.clientX, e.clientY);
+    if (hit.r < 0 || hit.c < 0 || hit.r >= N) return;
+    startEdit("full");
+  };
+
+  const onWheelFrozen = (e: React.WheelEvent) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.scrollTop += e.deltaY;
+    el.scrollLeft += e.deltaX;
+  };
+
+  // ---------- Клавиатура ----------
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (editingRef.current) return;
+    const mod = e.metaKey || e.ctrlKey;
+    const key = e.key;
+
+    if (mod && (key === "c" || key === "x" || key === "v" || key === "с" || key === "ч" || key === "м")) {
+      // Копирование/вставку обрабатывают события copy/cut/paste.
+      return;
+    }
+
+    let handled = true;
+    switch (key) {
+      case "ArrowUp":
+        move(-1, 0, e.shiftKey, mod);
+        break;
+      case "ArrowDown":
+        move(1, 0, e.shiftKey, mod);
+        break;
+      case "ArrowLeft":
+        move(0, -1, e.shiftKey, mod);
+        break;
+      case "ArrowRight":
+        move(0, 1, e.shiftKey, mod);
+        break;
+      case "Tab":
+        move(0, e.shiftKey ? -1 : 1);
+        break;
+      case "Enter":
+        if (e.shiftKey) move(-1, 0);
+        else startEdit("full");
+        break;
+      case "F2":
+        startEdit("full");
+        break;
+      case "Delete":
+      case "Backspace":
+        clearSelection("value");
+        break;
+      case "Escape":
+        useStore.getState().setClipboard(null);
+        break;
+      case "Home":
+        select(mod ? { r: 0, c: 0 } : { r: sel.anchor.r, c: 0 });
+        break;
+      case "End":
+        select(mod ? { r: N - 1, c: C - 1 } : { r: sel.anchor.r, c: C - 1 });
+        break;
+      case "PageDown":
+        move(Math.max(1, Math.floor(viewport.h / ROW_H) - 1), 0, e.shiftKey);
+        break;
+      case "PageUp":
+        move(-Math.max(1, Math.floor(viewport.h / ROW_H) - 1), 0, e.shiftKey);
+        break;
+      default:
+        handled = false;
+    }
+    if (handled) {
+      e.preventDefault();
+      return;
+    }
+
+    if (mod && (key === "z" || key === "я")) {
+      e.preventDefault();
+      if (e.shiftKey) useStore.getState().redo();
+      else useStore.getState().undo();
+      return;
+    }
+    if (mod && (key === "y" || key === "н")) {
+      e.preventDefault();
+      useStore.getState().redo();
+      return;
+    }
+    if (mod && (key === "a" || key === "ф")) {
+      e.preventDefault();
+      select({ r: 0, c: 0 }, { r: N - 1, c: C - 1 }, sel.anchor);
+      return;
+    }
+    if (!mod && !e.altKey && key.length === 1) {
+      e.preventDefault();
+      startEdit("quick", key);
+    }
+  };
+
+  const onEditorKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    e.stopPropagation();
+    const ed = editingRef.current;
+    if (!ed) return;
+    if (e.key === "Enter") {
+      if (e.altKey || e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const el = e.currentTarget;
+        el.setRangeText("\n", el.selectionStart, el.selectionEnd, "end");
+        setEditing({ ...ed, value: el.value });
+        return;
+      }
+      e.preventDefault();
+      commitEdit(e.shiftKey ? -1 : 1, 0);
+    } else if (e.key === "Tab") {
+      e.preventDefault();
+      commitEdit(0, e.shiftKey ? -1 : 1);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancelEdit();
+    } else if (ed.mode === "quick" && e.key.startsWith("Arrow")) {
+      e.preventDefault();
+      const d = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[
+        e.key
+      ] as [number, number];
+      commitEdit(d[0], d[1]);
+    }
+  };
+
+  const onCopy = (e: React.ClipboardEvent) => {
+    if (editingRef.current) return;
+    e.preventDefault();
+    doCopy(false, e.clipboardData);
+  };
+  const onCut = (e: React.ClipboardEvent) => {
+    if (editingRef.current) return;
+    e.preventDefault();
+    doCopy(true, e.clipboardData);
+  };
+  const onPaste = (e: React.ClipboardEvent) => {
+    if (editingRef.current) return;
+    e.preventDefault();
+    doPaste(e.clipboardData.getData("text/plain"));
+  };
+
+  // ---------- Контекстное меню ----------
+
+  const selectedRowIds = rowIds.slice(bounds.r0, bounds.r1 + 1);
+  const menuItems: MenuItem[] = [
+    { label: "Вырезать", hint: "⌘X", onClick: () => doCopy(true) },
+    { label: "Копировать", hint: "⌘C", onClick: () => doCopy(false) },
+    {
+      label: "Вставить",
+      hint: "⌘V",
+      onClick: async () => {
+        let text = useStore.getState().clipboard?.tsv ?? "";
+        try {
+          text = (await navigator.clipboard.readText()) || text;
+        } catch {}
+        doPaste(text);
+      },
+    },
+    { separator: true },
+    { label: "Очистить содержимое", hint: "Del", onClick: () => clearSelection("value") },
+    { label: "Убрать заливку", onClick: () => clearSelection("bg") },
+    { separator: true },
+    { label: "Вставить строку выше", onClick: () => void useStore.getState().insertRow(rowIds[bounds.r0], "above") },
+    { label: "Вставить строку ниже", onClick: () => void useStore.getState().insertRow(rowIds[bounds.r1], "below") },
+    {
+      label: "Переместить строку вверх",
+      disabled: bounds.r0 !== bounds.r1 || bounds.r0 === 0,
+      onClick: () => {
+        useStore.getState().moveRow(rowIds[bounds.r0], -1);
+        select({ r: sel.anchor.r - 1, c: sel.anchor.c });
+      },
+    },
+    {
+      label: "Переместить строку вниз",
+      disabled: bounds.r0 !== bounds.r1 || bounds.r0 === N - 1,
+      onClick: () => {
+        useStore.getState().moveRow(rowIds[bounds.r0], 1);
+        select({ r: sel.anchor.r + 1, c: sel.anchor.c });
+      },
+    },
+    { separator: true },
+    {
+      label: selectedRowIds.length > 1 ? `Удалить строки (${selectedRowIds.length})` : "Удалить строку",
+      danger: true,
+      onClick: () => {
+        const n = selectedRowIds.length;
+        if (!confirm(n > 1 ? `Удалить ${n} строк вместе с графиком?` : "Удалить строку вместе с графиком?")) return;
+        for (const id of selectedRowIds) void useStore.getState().deleteRow(id);
+      },
+    },
+  ];
+
+  // ---------- Отрисовка ----------
+
+  const r0v = Math.max(0, Math.floor(scroll.top / ROW_H) - OVERSCAN);
+  const r1v = Math.min(N - 1, Math.ceil((scroll.top + viewport.h) / ROW_H) + OVERSCAN);
+  const d0v = Math.max(0, Math.floor(scroll.left / COL_W) - OVERSCAN);
+  const d1v = Math.min(D - 1, Math.ceil((scroll.left + viewport.w) / COL_W) + OVERSCAN);
+
+  const bodyCells: React.ReactNode[] = [];
+  for (let r = r0v; r <= r1v; r++) {
+    const id = rowIds[r];
+    for (let d = Math.max(0, d0v - MAX_SPILL); d <= d1v; d++) {
+      const data = cells.get(cellKey(id, days[d]));
+      if (!data) continue;
+      let spill = 1;
+      if (data.value) {
+        while (spill <= MAX_SPILL && d + spill < D && !cells.get(cellKey(id, days[d + spill]))?.value) spill++;
+      }
+      if (d + spill - 1 < d0v) continue;
+      bodyCells.push(
+        <div
+          key={`${id}|${d}`}
+          className={styles.cell}
+          style={{
+            left: d * COL_W + 1,
+            top: r * ROW_H + 1,
+            background: data.bg ?? undefined,
+            zIndex: data.value ? 1 : 0,
+          }}
+          title={data.value.length > 14 ? data.value : undefined}
+        >
+          {data.value && (
+            <span className={styles.cellText} style={{ width: spill * COL_W - 7 }}>
+              {data.value.replace(/\n/g, " ")}
+            </span>
+          )}
+        </div>,
+      );
+    }
+  }
+
+  const columnDecor: React.ReactNode[] = [];
+  const headers: React.ReactNode[] = [];
+  for (let d = d0v; d <= d1v; d++) {
+    const h = formatDayHeader(days[d]);
+    const isToday = d === todayIdx;
+    const selectedCol = K + d >= bounds.c0 && K + d <= bounds.c1;
+    if (h.weekend || isToday)
+      columnDecor.push(
+        <div
+          key={`w${d}`}
+          className={isToday ? styles.todayCol : styles.weekendCol}
+          style={{ left: d * COL_W, width: COL_W }}
+        />,
+      );
+    if (isFirstOfMonth(days[d]))
+      columnDecor.push(<div key={`m${d}`} className={styles.monthLine} style={{ left: d * COL_W }} />);
+    headers.push(
+      <div
+        key={d}
+        className={`${styles.dayHeader} ${h.weekend ? styles.weekend : ""} ${isToday ? styles.today : ""} ${
+          selectedCol ? styles.headerSelected : ""
+        } ${isFirstOfMonth(days[d]) ? styles.monthStart : ""}`}
+        style={{ left: d * COL_W, width: COL_W }}
+      >
+        <span className={styles.dayDate}>{h.date}</span>
+        <span className={styles.dayWeekday}>{h.weekday}</span>
+      </div>,
+    );
+  }
+
+  const leftCells: React.ReactNode[] = [];
+  for (let r = r0v; r <= r1v; r++) {
+    const id = rowIds[r];
+    const row = rows[id];
+    const selectedRow = r >= bounds.r0 && r <= bounds.r1;
+    leftCells.push(
+      <div
+        key={`g${id}`}
+        className={`${styles.gutter} ${selectedRow ? styles.headerSelected : ""}`}
+        style={{ top: r * ROW_H, height: ROW_H }}
+      >
+        {r + 1}
+      </div>,
+    );
+    frozen.forEach((f, i) => {
+      const v = row?.[f.field] ?? "";
+      leftCells.push(
+        <div
+          key={`${id}|${f.field}`}
+          className={styles.frozenCell}
+          style={{ top: r * ROW_H, left: GUTTER_W + frozenX[i], width: f.width, height: ROW_H }}
+          title={v.length > 20 ? v : undefined}
+        >
+          {v.replace(/\n/g, " ")}
+        </div>,
+      );
+    });
+  }
+
+  // Прямоугольники выделения в двух панелях — закреплённой и прокручиваемой.
+  const selRects = (r0: number, r1: number, c0: number, c1: number) => {
+    const top = r0 * ROW_H;
+    const height = (r1 - r0 + 1) * ROW_H;
+    const frozenRect =
+      c0 < K ? { left: GUTTER_W + frozenX[c0], width: frozenX[Math.min(c1, K - 1) + 1] - frozenX[c0], top, height } : null;
+    const bodyRect =
+      c1 >= K
+        ? { left: (Math.max(c0, K) - K) * COL_W, width: (c1 - Math.max(c0, K) + 1) * COL_W, top, height }
+        : null;
+    return { frozenRect, bodyRect };
+  };
+
+  const hasRows = N > 0;
+  const selR = hasRows ? selRects(bounds.r0, bounds.r1, bounds.c0, bounds.c1) : null;
+  const activeR = hasRows ? selRects(sel.anchor.r, sel.anchor.r, sel.anchor.c, sel.anchor.c) : null;
+  const multi = bounds.r0 !== bounds.r1 || bounds.c0 !== bounds.c1;
+
+  const fill = drag?.kind === "fill" ? fillRect(drag.target) : null;
+  const fillR = fill ? selRects(fill.r0, fill.r1, fill.c0, fill.c1) : null;
+
+  let cutR: ReturnType<typeof selRects> | null = null;
+  if (clipboard?.cut && clipboard.cut.gridId === panel) {
+    const rs = clipboard.cut.rowIds.map((id) => rowIds.indexOf(id)).filter((i) => i >= 0);
+    const cs = clipboard.cut.colKeys
+      .map((k) => (k.startsWith("f:") ? frozen.findIndex((f) => `f:${f.field}` === k) : K + days.indexOf(k.slice(2))))
+      .filter((i) => i >= 0 && (i >= K ? i - K < D : true));
+    if (rs.length && cs.length) cutR = selRects(Math.min(...rs), Math.max(...rs), Math.min(...cs), Math.max(...cs));
+  }
+
+  const overlay = (rect: { left: number; width: number; top: number; height: number } | null, cls: string, key: string) =>
+    rect && <div key={key} className={cls} style={rect} />;
+
+  const onEditorChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const ed = editingRef.current;
+    if (ed) setEditing({ ...ed, value: e.target.value });
+  };
+
+  let editorNode: React.ReactNode = null;
+  if (editing) {
+    const inFrozen = editing.c < K;
+    const left = inFrozen ? GUTTER_W + frozenX[editing.c] : (editing.c - K) * COL_W;
+    const width = inFrozen ? Math.max(frozen[editing.c].width, 220) : Math.max(COL_W * 2, 240);
+    const lines = editing.value.split("\n").length;
+    editorNode = (
+      <textarea
+        ref={editorRef}
+        className={styles.editor}
+        style={{ left, top: editing.r * ROW_H, width, height: Math.max(ROW_H, lines * 17 + 6) }}
+        value={editing.value}
+        spellCheck={false}
+        onChange={onEditorChange}
+        onKeyDown={onEditorKeyDown}
+        onBlur={() => commitEdit()}
+      />
+    );
+  }
+
+  const contentH = N * ROW_H + ROW_H * 2;
+
+  return (
+    <div
+      ref={rootRef}
+      className={`${styles.root} ${focused ? styles.focused : ""}`}
+      onScroll={resetScroll}
+      onMouseDown={onMouseDown}
+      onDoubleClick={onDoubleClick}
+      onContextMenu={(e) => {
+        if ((e.target as HTMLElement).closest("textarea, [data-no-grid]") || N === 0) return;
+        e.preventDefault();
+        setMenu({ x: e.clientX, y: e.clientY });
+      }}
+      onFocus={() => setFocused(true)}
+      onBlur={(e) => {
+        if (!rootRef.current?.contains(e.relatedTarget as Node)) setFocused(false);
+      }}
+    >
+      <textarea
+        ref={sinkRef}
+        className={styles.sink}
+        aria-label="Таблица"
+        onKeyDown={onKeyDown}
+        onCopy={onCopy}
+        onCut={onCut}
+        onPaste={onPaste}
+        onChange={() => {}}
+      />
+
+      <div className={styles.corner} style={{ width: leftW, height: HEADER_H }}>
+        <div className={styles.gutterHeader} style={{ width: GUTTER_W }} />
+        {frozen.map((f, i) => (
+          <div
+            key={f.field}
+            className={`${styles.frozenHeader} ${i >= bounds.c0 && i <= bounds.c1 ? styles.headerSelected : ""}`}
+            style={{ left: GUTTER_W + frozenX[i], width: f.width }}
+          >
+            {f.title}
+          </div>
+        ))}
+      </div>
+
+      <div className={styles.header} style={{ left: leftW, height: HEADER_H }} onScroll={resetScroll}>
+        <div style={{ transform: `translateX(${-scroll.left}px)`, position: "relative", height: "100%" }}>
+          {headers}
+        </div>
+      </div>
+
+      <div
+        className={styles.left}
+        style={{ top: HEADER_H, width: leftW }}
+        onWheel={onWheelFrozen}
+        onScroll={resetScroll}
+      >
+        <div style={{ transform: `translateY(${-scroll.top}px)`, position: "relative", height: contentH }}>
+          {leftCells}
+          <button
+            className={styles.addRow}
+            style={{ top: N * ROW_H, width: leftW }}
+            onClick={() => void useStore.getState().addRow(panel)}
+          >
+            + Добавить строку
+          </button>
+          {selR && overlay(selR.frozenRect, `${styles.selRange} ${multi ? "" : styles.selSingle}`, "sf")}
+          {activeR && overlay(activeR.frozenRect, styles.selActive, "af")}
+          {cutR && overlay(cutR.frozenRect, styles.cutRect, "cf")}
+          {fillR && overlay(fillR.frozenRect, styles.fillPreview, "ff")}
+          {editing && editing.c < K && editorNode}
+        </div>
+      </div>
+
+      <div ref={bodyRef} className={styles.body} style={{ left: leftW, top: HEADER_H }} onScroll={onScroll}>
+        <div
+          className={styles.bodyInner}
+          style={{
+            width: D * COL_W,
+            height: contentH,
+            backgroundSize: `${COL_W}px ${ROW_H}px`,
+            ["--rows-h" as string]: `${N * ROW_H}px`,
+          }}
+        >
+          {columnDecor}
+          {bodyCells}
+          {selR && overlay(selR.bodyRect, `${styles.selRange} ${multi ? "" : styles.selSingle}`, "sb")}
+          {activeR && overlay(activeR.bodyRect, styles.selActive, "ab")}
+          {cutR && overlay(cutR.bodyRect, styles.cutRect, "cb")}
+          {fillR && overlay(fillR.bodyRect, styles.fillPreview, "fb")}
+          {hasRows && bounds.c1 >= K && !editing && (
+            <div
+              className={styles.fillHandle}
+              style={{ left: (bounds.c1 - K + 1) * COL_W - 4, top: (bounds.r1 + 1) * ROW_H - 4 }}
+              onMouseDown={onFillHandleDown}
+            />
+          )}
+          {editing && editing.c >= K && editorNode}
+        </div>
+      </div>
+
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
+    </div>
+  );
+}

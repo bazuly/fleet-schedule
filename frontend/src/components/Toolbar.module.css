@@ -1,0 +1,188 @@
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 46px;
+  padding: 0 12px;
+  background: #f9fbfd;
+  border-bottom: 1px solid #e0e3e7;
+  font-size: 13px;
+  flex-shrink: 0;
+  overflow-x: auto;
+  overflow-y: visible;
+  scrollbar-width: none;
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 15px;
+  color: #1f1f1f;
+  margin-right: 6px;
+  white-space: nowrap;
+}
+
+.group {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 10px;
+  border-left: 1px solid #e0e3e7;
+}
+
+.group button,
+.link {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #3c4043;
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+.group button:hover:not(:disabled),
+.link:hover {
+  background: #e8eaed;
+}
+
+.group button:disabled {
+  color: #bdc1c6;
+  cursor: default;
+}
+
+.toggleOn {
+  background: #d3e3fd !important;
+  color: #0b57d0 !important;
+}
+
+.fillIcon {
+  margin-right: 4px;
+}
+
+.palette {
+  position: fixed;
+  z-index: 2000;
+  display: grid;
+  grid-template-columns: repeat(6, 22px);
+  gap: 4px;
+  padding: 10px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(60, 64, 67, 0.3);
+}
+
+.palette .swatch {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 4px;
+}
+
+.palette .swatch:hover {
+  outline: 2px solid #1a73e8;
+}
+
+.palette .noFill {
+  grid-column: 1 / -1;
+  justify-content: center;
+  border: 1px solid #dadce0;
+}
+
+.dateLabel {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #5f6368;
+}
+
+.dateLabel input {
+  height: 26px;
+  border: 1px solid #dadce0;
+  border-radius: 6px;
+  padding: 0 6px;
+  font: inherit;
+  color: #202124;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #5f6368;
+  margin-left: 4px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.status {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #bdc1c6;
+}
+
+.online {
+  background: #1e8e3e;
+}
+
+.offline {
+  background: #d93025;
+}
+
+.connecting {
+  background: #f9ab00;
+}
+
+.user {
+  color: #3c4043;
+  font-weight: 500;
+  margin: 0 6px 0 2px;
+}
+
+.formulaBar {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  border-bottom: 1px solid #e0e3e7;
+  background: #fff;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.cellRef {
+  width: 260px;
+  padding: 0 10px;
+  color: #3c4043;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-right: 1px solid #e0e3e7;
+  line-height: 30px;
+}
+
+.fx {
+  padding: 0 10px;
+  color: #80868b;
+  font-style: italic;
+  border-right: 1px solid #e0e3e7;
+  line-height: 30px;
+}
+
+.formulaInput {
+  flex: 1;
+  height: 100%;
+  border: 0;
+  outline: none;
+  padding: 0 10px;
+  font: inherit;
+  background: transparent;
+}

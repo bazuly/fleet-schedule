@@ -1,0 +1,11 @@
+.env
+.DS_Store
+reference-sheet.csv
+
+backend/target/
+
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/next-env.d.ts
+frontend/*.tsbuildinfo

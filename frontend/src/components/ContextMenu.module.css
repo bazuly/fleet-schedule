@@ -1,0 +1,49 @@
+.menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 230px;
+  padding: 6px 0;
+  background: #fff;
+  border-radius: 6px;
+  box-shadow:
+    0 2px 6px rgba(60, 64, 67, 0.15),
+    0 6px 18px rgba(60, 64, 67, 0.25);
+  font-size: 13px;
+}
+
+.item {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 6px 16px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: #202124;
+  font: inherit;
+}
+
+.item:hover:not(:disabled) {
+  background: #f1f3f4;
+}
+
+.item:disabled {
+  color: #bdc1c6;
+  cursor: default;
+}
+
+.danger {
+  color: #c5221f;
+}
+
+.hint {
+  color: #80868b;
+}
+
+.separator {
+  height: 1px;
+  margin: 5px 0;
+  background: #e8eaed;
+}

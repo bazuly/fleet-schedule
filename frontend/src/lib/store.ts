@@ -1,0 +1,361 @@
+"use client";
+
+import { create } from "zustand";
+import { addDays, todayIso } from "./dates";
+import { api, type Cell, type Panel, type Row, type RowField, type RowPatch, type User } from "./api";
+
+/** Ключ колонки: "f:driver" — закреплённое поле строки, "d:2026-11-25" — день графика. */
+export type ColKey = string;
+
+export const fieldCol = (f: RowField): ColKey => `f:${f}`;
+export const dayCol = (day: string): ColKey => `d:${day}`;
+export const isDayCol = (c: ColKey) => c.startsWith("d:");
+export const colDay = (c: ColKey) => c.slice(2);
+export const colField = (c: ColKey) => c.slice(2) as RowField;
+
+export const cellKey = (rowId: string, day: string) => `${rowId}|${day}`;
+
+export interface CellData {
+  value: string;
+  bg: string | null;
+}
+
+export interface Edit {
+  rowId: string;
+  col: ColKey;
+  value?: string;
+  bg?: string | null;
+}
+
+interface Batch {
+  cellsBefore: Cell[];
+  cellsAfter: Cell[];
+  rowsBefore: RowPatch[];
+  rowsAfter: RowPatch[];
+}
+
+export interface ActiveSelection {
+  gridId: Panel;
+  rowIds: string[];
+  colKeys: ColKey[];
+  anchorRowId: string;
+  anchorCol: ColKey;
+}
+
+export interface ClipboardData {
+  tsv: string;
+  values: string[][];
+  bgs: (string | null)[][];
+  cut?: { gridId: Panel; rowIds: string[]; colKeys: ColKey[] };
+}
+
+export type WsStatus = "connecting" | "online" | "offline";
+
+interface State {
+  user: User | null;
+  rows: Record<string, Row>;
+  cells: Map<string, CellData>;
+  range: { from: string; to: string };
+  loading: boolean;
+  wsStatus: WsStatus;
+  toast: string | null;
+
+  undoStack: Batch[];
+  redoStack: Batch[];
+  clipboard: ClipboardData | null;
+  active: ActiveSelection | null;
+  syncScroll: boolean;
+
+  setUser(u: User | null): void;
+  setRange(from: string, to: string): Promise<void>;
+  loadAll(): Promise<void>;
+  setWsStatus(s: WsStatus): void;
+  showToast(msg: string): void;
+
+  applyRemoteCells(cells: Cell[]): void;
+  applyRemoteRows(rows: Row[]): void;
+  removeRowLocal(id: string): void;
+
+  applyEdits(edits: Edit[]): void;
+  undo(): void;
+  redo(): void;
+
+  setClipboard(c: ClipboardData | null): void;
+  setActive(a: ActiveSelection | null): void;
+  setSyncScroll(v: boolean): void;
+  applyBgToActive(bg: string | null): void;
+
+  addRow(panel: Panel): Promise<void>;
+  insertRow(refId: string, where: "above" | "below"): Promise<void>;
+  moveRow(id: string, dir: -1 | 1): void;
+  deleteRow(id: string): Promise<void>;
+}
+
+const UNDO_LIMIT = 200;
+
+function defaultRange() {
+  const today = todayIso();
+  return { from: addDays(today, -30), to: addDays(today, 90) };
+}
+
+export function sortedRowIds(rows: Record<string, Row>, panel: Panel): string[] {
+  return Object.values(rows)
+    .filter((r) => r.panel === panel)
+    .sort((a, b) => a.position - b.position)
+    .map((r) => r.id);
+}
+
+export const useStore = create<State>((set, get) => {
+  /** Применяет пакет локально и отправляет его на сервер. */
+  function commit(cells: Cell[], patches: RowPatch[]) {
+    if (cells.length) {
+      const next = new Map(get().cells);
+      for (const c of cells) {
+        const k = cellKey(c.row_id, c.day);
+        if (!c.value && !c.bg) next.delete(k);
+        else next.set(k, { value: c.value, bg: c.bg });
+      }
+      set({ cells: next });
+      api.putCells(cells).catch((e) => {
+        get().showToast(`Не удалось сохранить: ${e.message}`);
+        void get().loadAll();
+      });
+    }
+    if (patches.length) {
+      const rows = { ...get().rows };
+      for (const p of patches) {
+        if (rows[p.id]) rows[p.id] = { ...rows[p.id], ...p };
+      }
+      set({ rows });
+      api.patchRows(patches).catch((e) => {
+        get().showToast(`Не удалось сохранить: ${e.message}`);
+        void get().loadAll();
+      });
+    }
+  }
+
+  return {
+    user: null,
+    rows: {},
+    cells: new Map(),
+    range: defaultRange(),
+    loading: false,
+    wsStatus: "connecting",
+    toast: null,
+    undoStack: [],
+    redoStack: [],
+    clipboard: null,
+    active: null,
+    syncScroll: true,
+
+    setUser: (user) => set({ user }),
+
+    async setRange(from, to) {
+      set({ range: { from, to } });
+      await get().loadAll();
+    },
+
+    async loadAll() {
+      set({ loading: true });
+      try {
+        const { from, to } = get().range;
+        const [rows, cells] = await Promise.all([api.rows(), api.cells(from, to)]);
+        const rowMap: Record<string, Row> = {};
+        for (const r of rows) rowMap[r.id] = r;
+        const cellMap = new Map<string, CellData>();
+        for (const c of cells) cellMap.set(cellKey(c.row_id, c.day), { value: c.value, bg: c.bg });
+        set({ rows: rowMap, cells: cellMap });
+      } catch (e) {
+        get().showToast(`Ошибка загрузки: ${(e as Error).message}`);
+      } finally {
+        set({ loading: false });
+      }
+    },
+
+    setWsStatus: (wsStatus) => set({ wsStatus }),
+
+    showToast(msg) {
+      set({ toast: msg });
+      setTimeout(() => {
+        if (get().toast === msg) set({ toast: null });
+      }, 4000);
+    },
+
+    applyRemoteCells(cells) {
+      const { from, to } = get().range;
+      const next = new Map(get().cells);
+      for (const c of cells) {
+        if (c.day < from || c.day > to) continue;
+        const k = cellKey(c.row_id, c.day);
+        if (!c.value && !c.bg) next.delete(k);
+        else next.set(k, { value: c.value, bg: c.bg });
+      }
+      set({ cells: next });
+    },
+
+    applyRemoteRows(incoming) {
+      const rows = { ...get().rows };
+      for (const r of incoming) rows[r.id] = r;
+      set({ rows });
+    },
+
+    removeRowLocal(id) {
+      const rows = { ...get().rows };
+      delete rows[id];
+      const cells = new Map(get().cells);
+      for (const k of cells.keys()) if (k.startsWith(`${id}|`)) cells.delete(k);
+      set({ rows, cells });
+    },
+
+    applyEdits(edits) {
+      const { cells, rows } = get();
+      const cellsBefore: Cell[] = [];
+      const cellsAfter: Cell[] = [];
+      const rowsBefore = new Map<string, RowPatch>();
+      const rowsAfter = new Map<string, RowPatch>();
+      const seen = new Set<string>();
+
+      for (const e of edits) {
+        const dedupKey = `${e.rowId}|${e.col}`;
+        if (seen.has(dedupKey)) continue;
+        seen.add(dedupKey);
+        if (!rows[e.rowId]) continue;
+
+        if (isDayCol(e.col)) {
+          const day = colDay(e.col);
+          const prev = cells.get(cellKey(e.rowId, day)) ?? { value: "", bg: null };
+          const value = e.value ?? prev.value;
+          const bg = e.bg !== undefined ? e.bg : prev.bg;
+          if (value === prev.value && bg === prev.bg) continue;
+          cellsBefore.push({ row_id: e.rowId, day, value: prev.value, bg: prev.bg });
+          cellsAfter.push({ row_id: e.rowId, day, value, bg });
+        } else if (e.value !== undefined) {
+          const field = colField(e.col);
+          const prev = rows[e.rowId][field];
+          if (prev === e.value) continue;
+          rowsBefore.set(e.rowId, { ...rowsBefore.get(e.rowId), id: e.rowId, [field]: prev });
+          rowsAfter.set(e.rowId, { ...rowsAfter.get(e.rowId), id: e.rowId, [field]: e.value });
+        }
+      }
+
+      if (!cellsAfter.length && !rowsAfter.size) return;
+      const batch: Batch = {
+        cellsBefore,
+        cellsAfter,
+        rowsBefore: [...rowsBefore.values()],
+        rowsAfter: [...rowsAfter.values()],
+      };
+      set({
+        undoStack: [...get().undoStack.slice(-UNDO_LIMIT + 1), batch],
+        redoStack: [],
+      });
+      commit(batch.cellsAfter, batch.rowsAfter);
+    },
+
+    undo() {
+      const stack = get().undoStack;
+      const batch = stack[stack.length - 1];
+      if (!batch) return;
+      set({ undoStack: stack.slice(0, -1), redoStack: [...get().redoStack, batch] });
+      commit(batch.cellsBefore, batch.rowsBefore);
+    },
+
+    redo() {
+      const stack = get().redoStack;
+      const batch = stack[stack.length - 1];
+      if (!batch) return;
+      set({ redoStack: stack.slice(0, -1), undoStack: [...get().undoStack, batch] });
+      commit(batch.cellsAfter, batch.rowsAfter);
+    },
+
+    setClipboard: (clipboard) => set({ clipboard }),
+    setActive: (active) => set({ active }),
+    setSyncScroll: (syncScroll) => set({ syncScroll }),
+
+    applyBgToActive(bg) {
+      const a = get().active;
+      if (!a) return;
+      const edits: Edit[] = [];
+      for (const rowId of a.rowIds)
+        for (const col of a.colKeys) if (isDayCol(col)) edits.push({ rowId, col, bg });
+      get().applyEdits(edits);
+    },
+
+    async addRow(panel) {
+      try {
+        const row = await api.createRow({ panel });
+        get().applyRemoteRows([row]);
+      } catch (e) {
+        get().showToast(`Не удалось добавить строку: ${(e as Error).message}`);
+      }
+    },
+
+    async insertRow(refId, where) {
+      const { rows } = get();
+      const ref = rows[refId];
+      if (!ref) return;
+      const ids = sortedRowIds(rows, ref.panel);
+      const idx = ids.indexOf(refId);
+      let position: number;
+      if (where === "above") {
+        const prev = idx > 0 ? rows[ids[idx - 1]].position : ref.position - 1;
+        position = (prev + ref.position) / 2;
+      } else {
+        const next = idx < ids.length - 1 ? rows[ids[idx + 1]].position : ref.position + 1;
+        position = (ref.position + next) / 2;
+      }
+      try {
+        const row = await api.createRow({ panel: ref.panel, position });
+        get().applyRemoteRows([row]);
+      } catch (e) {
+        get().showToast(`Не удалось добавить строку: ${(e as Error).message}`);
+      }
+    },
+
+    moveRow(id, dir) {
+      const { rows } = get();
+      const row = rows[id];
+      if (!row) return;
+      const ids = sortedRowIds(rows, row.panel);
+      const idx = ids.indexOf(id);
+      const other = rows[ids[idx + dir]];
+      if (!other) return;
+      commit([], [
+        { id: row.id, position: other.position },
+        { id: other.id, position: row.position },
+      ]);
+    },
+
+    async deleteRow(id) {
+      try {
+        await api.deleteRow(id);
+        get().removeRowLocal(id);
+      } catch (e) {
+        get().showToast(`Не удалось удалить строку: ${(e as Error).message}`);
+      }
+    },
+  };
+});
+
+type ScrollListener = (source: string, left: number) => void;
+type DayListener = (day: string) => void;
+
+/** Шина для синхронной горизонтальной прокрутки графика и плавающих окон. */
+export const scrollBus = {
+  listeners: new Set<ScrollListener>(),
+  dayListeners: new Set<DayListener>(),
+  emit(source: string, left: number) {
+    for (const l of this.listeners) l(source, left);
+  },
+  subscribe(l: ScrollListener) {
+    this.listeners.add(l);
+    return () => void this.listeners.delete(l);
+  },
+  scrollToDay(day: string) {
+    for (const l of this.dayListeners) l(day);
+  },
+  subscribeDay(l: DayListener) {
+    this.dayListeners.add(l);
+    return () => void this.dayListeners.delete(l);
+  },
+};
