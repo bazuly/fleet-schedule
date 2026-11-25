@@ -66,11 +66,8 @@ export default function MapView({ target }: Props) {
     void import("leaflet").then((L) => {
       if (cancelled || !boxRef.current) return;
       leafletRef.current = L;
-      map = L.map(boxRef.current, { zoomControl: true, attributionControl: true }).setView([59.94, 30.31], 6);
-      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-      }).addTo(map);
+      map = L.map(boxRef.current, { zoomControl: true, attributionControl: false }).setView([59.94, 30.31], 6);
+      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(map);
       layerRef.current = L.layerGroup().addTo(map);
       mapRef.current = map;
       ro = new ResizeObserver(() => map?.invalidateSize());

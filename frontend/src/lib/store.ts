@@ -116,6 +116,8 @@ interface State {
   stepZoom(dir: 1 | -1): void;
   setMapTarget(t: MapTarget | null): void;
   applyBgToActive(bg: string | null): void;
+  applyFgToActive(fg: string | null): void;
+  mergeActive(): void;
 
   addRow(panel: Panel): Promise<void>;
   insertRow(refId: string, where: "above" | "below"): Promise<void>;
@@ -337,6 +339,53 @@ export const useStore = create<State>((set, get) => {
       const edits: Edit[] = [];
       for (const rowId of a.rowIds)
         for (const col of a.colKeys) if (isDayCol(col)) edits.push({ rowId, col, bg });
+      get().applyEdits(edits);
+    },
+
+    applyFgToActive(fg) {
+      const a = get().active;
+      if (!a) return;
+      const edits: Edit[] = [];
+      for (const rowId of a.rowIds)
+        for (const col of a.colKeys) if (isDayCol(col)) edits.push({ rowId, col, fg });
+      get().applyEdits(edits);
+    },
+
+    mergeActive() {
+      const a = get().active;
+      if (!a) return;
+      const days = [...new Set(a.colKeys.filter(isDayCol).map(colDay))].sort();
+      if (days.length < 2) {
+        get().showToast("Выделите несколько дней в одной или нескольких строках");
+        return;
+      }
+      const spanDays: string[] = [];
+      for (let day = days[0]; day <= days[days.length - 1]; day = addDays(day, 1)) spanDays.push(day);
+      if (spanDays.length > 62) {
+        get().showToast("Нельзя объединить больше 62 дней");
+        return;
+      }
+      const { cells } = get();
+      const edits: Edit[] = [];
+      let losesText = false;
+      for (const rowId of a.rowIds) {
+        const anchor = cells.get(cellKey(rowId, spanDays[0])) ?? EMPTY_CELL;
+        for (const day of spanDays.slice(1)) {
+          const cell = cells.get(cellKey(rowId, day));
+          if (cell?.value) losesText = true;
+          if (cell) edits.push({ rowId, col: dayCol(day), value: "", bg: null, fg: null, comment: "", span: 1 });
+        }
+        edits.push({
+          rowId,
+          col: dayCol(spanDays[0]),
+          value: anchor.value,
+          bg: anchor.bg,
+          fg: anchor.fg,
+          comment: anchor.comment,
+          span: spanDays.length,
+        });
+      }
+      if (losesText && !confirm("Объединить ячейки? Останется только текст левой ячейки в каждой строке.")) return;
       get().applyEdits(edits);
     },
 

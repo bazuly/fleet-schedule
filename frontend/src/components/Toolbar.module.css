@@ -65,6 +65,14 @@
   margin-right: 4px;
 }
 
+.fontIcon {
+  margin-right: 4px;
+  font-weight: 700;
+  color: #1a73e8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .palette {
   position: fixed;
   z-index: 2000;

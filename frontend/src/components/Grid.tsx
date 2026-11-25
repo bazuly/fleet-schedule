@@ -132,22 +132,12 @@ export default function Grid({ panel, frozen }: Props) {
     [rowIds, cells, days, K],
   );
 
-  // Ширина объединения: сохранённый span или старая цепочка «текст + та же заливка дальше».
+  // Объединение только явное: кнопка «Объединить» записывает span. Одинаковая заливка клетки не склеивает.
   const spanAt = useCallback(
     (r: number, dayIndex: number): number => {
       if (dayIndex < 0 || dayIndex >= D) return 1;
-      const data = cellAt(r, K + dayIndex);
-      if (!data) return 1;
-      const stored = data.span ?? 1;
-      if (stored > 1) return Math.min(stored, D - dayIndex);
-      if (!data.value || !data.bg) return 1;
-      let n = 1;
-      while (n < MAX_SPAN && dayIndex + n < D) {
-        const next = cellAt(r, K + dayIndex + n);
-        if (!next || next.value || next.comment || (next.span ?? 1) > 1 || next.bg !== data.bg) break;
-        n += 1;
-      }
-      return n;
+      const stored = cellAt(r, K + dayIndex)?.span ?? 1;
+      return stored > 1 ? Math.min(stored, D - dayIndex) : 1;
     },
     [D, K, cellAt],
   );

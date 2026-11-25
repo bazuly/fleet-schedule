@@ -14,6 +14,11 @@ const PALETTE = [
   "#ead1dc", "#efefef", "#d9d9d9", "#b7b7b7", "#ffff00", "#00ff00",
 ];
 
+const FONT_COLORS = [
+  "#000000", "#434343", "#ffffff", "#ffff00", "#ff0000", "#ff9900",
+  "#00ff00", "#0000ff", "#9900ff", "#e69138", "#cc0000", "#1155cc",
+];
+
 export type PanelKey = "unassigned" | "pickups";
 
 interface Props {
@@ -37,6 +42,10 @@ export default function Toolbar({ visible, onToggle }: Props) {
   const zoomBtnRef = useRef<HTMLButtonElement>(null);
   const [palette, setPalette] = useState<{ x: number; y: number } | null>(null);
   const paletteRef = useRef<HTMLDivElement>(null);
+  const [fontMenu, setFontMenu] = useState<{ x: number; y: number } | null>(null);
+  const fontRef = useRef<HTMLDivElement>(null);
+  const active = useStore((s) => s.active);
+  const canMerge = (active?.colKeys.filter(isDayCol).length ?? 0) > 1;
   const paletteOpen = palette !== null;
   const setPaletteOpen = (open: boolean) => {
     if (!open) return setPalette(null);
@@ -66,17 +75,18 @@ export default function Toolbar({ visible, onToggle }: Props) {
   }, []);
 
   useEffect(() => {
-    if (!paletteOpen && !zoomMenu) return;
+    if (!paletteOpen && !zoomMenu && !fontMenu) return;
     const close = (e: MouseEvent) => {
       const node = e.target as Node;
       if (paletteOpen && !paletteRef.current?.contains(node)) setPalette(null);
+      if (fontMenu && !fontRef.current?.contains(node)) setFontMenu(null);
       if (zoomMenu && !zoomBtnRef.current?.contains(node) && !(e.target as HTMLElement).closest("[data-zoom-menu]")) {
         setZoomMenu(null);
       }
     };
     window.addEventListener("mousedown", close);
     return () => window.removeEventListener("mousedown", close);
-  }, [paletteOpen, zoomMenu]);
+  }, [paletteOpen, zoomMenu, fontMenu]);
 
   const logout = async () => {
     try {
@@ -128,6 +138,56 @@ export default function Toolbar({ visible, onToggle }: Props) {
             </button>
           </div>
         )}
+      </div>
+
+      <div className={styles.group} ref={fontRef}>
+        <button
+          onMouseDown={keepFocus}
+          title="Цвет шрифта"
+          onClick={() => {
+            if (fontMenu) return setFontMenu(null);
+            const rect = fontRef.current?.getBoundingClientRect();
+            setFontMenu(rect ? { x: rect.left, y: rect.bottom + 6 } : { x: 0, y: 0 });
+          }}
+        >
+          <span className={styles.fontIcon}>А</span> Шрифт ▾
+        </button>
+        {fontMenu && (
+          <div className={styles.palette} style={{ left: fontMenu.x, top: fontMenu.y }} onMouseDown={keepFocus}>
+            {FONT_COLORS.map((c) => (
+              <button
+                key={c}
+                className={styles.swatch}
+                style={{ background: c }}
+                title={c}
+                onClick={() => {
+                  useStore.getState().applyFgToActive(c);
+                  setFontMenu(null);
+                }}
+              />
+            ))}
+            <button
+              className={styles.noFill}
+              onClick={() => {
+                useStore.getState().applyFgToActive(null);
+                setFontMenu(null);
+              }}
+            >
+              Обычный чёрный
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className={styles.group}>
+        <button
+          onMouseDown={keepFocus}
+          disabled={!canMerge}
+          title="Объединить выделенные дни в каждой строке"
+          onClick={() => useStore.getState().mergeActive()}
+        >
+          Объединить
+        </button>
       </div>
 
       <div className={styles.group}>
