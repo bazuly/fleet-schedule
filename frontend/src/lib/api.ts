@@ -17,6 +17,8 @@ export interface Row {
   tractor: string;
   trailer: string;
   note: string;
+  /** work | dayoff | sick | free | repair. Пусто — без заливки. */
+  status: string;
 }
 
 export type RowField = "driver" | "tractor" | "trailer" | "note";
@@ -32,7 +34,7 @@ export interface Cell {
   span: number;
 }
 
-export type RowPatch = { id: string } & Partial<Pick<Row, RowField | "position">>;
+export type RowPatch = { id: string } & Partial<Pick<Row, RowField | "position" | "status">>;
 
 export type ServerEvent =
   | { type: "cells"; by: string; client: string | null; cells: Cell[] }

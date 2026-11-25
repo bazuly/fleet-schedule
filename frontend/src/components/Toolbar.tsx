@@ -98,8 +98,6 @@ export default function Toolbar({ visible, onToggle }: Props) {
 
   return (
     <div className={styles.toolbar}>
-      <div className={styles.brand}>График транспорта</div>
-
       <div className={styles.group}>
         <button onMouseDown={keepFocus} disabled={!canUndo} onClick={() => useStore.getState().undo()} title="Отменить (⌘Z)">
           ↶

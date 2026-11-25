@@ -19,7 +19,7 @@ pub async fn list(
     AuthUser(_): AuthUser,
 ) -> AppResult<Json<Vec<Row>>> {
     let rows = sqlx::query_as::<_, Row>(
-        "SELECT id, panel, position, driver, tractor, trailer, note
+        "SELECT id, panel, position, driver, tractor, trailer, note, status
          FROM schedule_rows ORDER BY panel, position",
     )
     .fetch_all(&state.db)
@@ -63,7 +63,7 @@ pub async fn create(
     let row = sqlx::query_as::<_, Row>(
         "INSERT INTO schedule_rows (id, panel, position, driver, tractor, trailer)
          VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, panel, position, driver, tractor, trailer, note",
+         RETURNING id, panel, position, driver, tractor, trailer, note, status",
     )
     .bind(Uuid::new_v4())
     .bind(&req.panel)
@@ -90,7 +90,10 @@ pub struct PatchRow {
     tractor: Option<String>,
     trailer: Option<String>,
     note: Option<String>,
+    status: Option<String>,
 }
+
+const ROW_STATUSES: [&str; 6] = ["", "work", "dayoff", "sick", "free", "repair"];
 
 pub async fn patch_many(
     State(state): State<AppState>,
@@ -101,6 +104,11 @@ pub async fn patch_many(
     let mut tx = state.db.begin().await?;
     let mut updated = Vec::with_capacity(patches.len());
     for p in patches {
+        if let Some(ref status) = p.status {
+            if !ROW_STATUSES.contains(&status.as_str()) {
+                return Err(AppError::BadRequest(format!("unknown status: {status}")));
+            }
+        }
         let row = sqlx::query_as::<_, Row>(
             "UPDATE schedule_rows SET
                 position = COALESCE($2, position),
@@ -108,9 +116,10 @@ pub async fn patch_many(
                 tractor  = COALESCE($4, tractor),
                 trailer  = COALESCE($5, trailer),
                 note     = COALESCE($6, note),
+                status   = COALESCE($7, status),
                 updated_at = now()
              WHERE id = $1
-             RETURNING id, panel, position, driver, tractor, trailer, note",
+             RETURNING id, panel, position, driver, tractor, trailer, note, status",
         )
         .bind(p.id)
         .bind(p.position)
@@ -118,6 +127,7 @@ pub async fn patch_many(
         .bind(p.tractor)
         .bind(p.trailer)
         .bind(p.note)
+        .bind(p.status)
         .fetch_optional(&mut *tx)
         .await?;
         if let Some(row) = row {

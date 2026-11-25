@@ -13,6 +13,9 @@ pub struct Row {
     pub tractor: String,
     pub trailer: String,
     pub note: String,
+    /// work | dayoff | sick | free | repair. Пусто — без заливки.
+    #[serde(default)]
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]

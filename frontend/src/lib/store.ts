@@ -118,6 +118,7 @@ interface State {
   applyBgToActive(bg: string | null): void;
   applyFgToActive(fg: string | null): void;
   mergeActive(): void;
+  setRowStatus(rowId: string, status: string): void;
 
   addRow(panel: Panel): Promise<void>;
   insertRow(refId: string, where: "above" | "below"): Promise<void>;
@@ -387,6 +388,18 @@ export const useStore = create<State>((set, get) => {
       }
       if (losesText && !confirm("Объединить ячейки? Останется только текст левой ячейки в каждой строке.")) return;
       get().applyEdits(edits);
+    },
+
+    setRowStatus(rowId, status) {
+      const row = get().rows[rowId];
+      if (!row || (row.status || "") === status) return;
+      const before: RowPatch = { id: rowId, status: row.status || "" };
+      const after: RowPatch = { id: rowId, status };
+      set({
+        undoStack: [...get().undoStack.slice(-UNDO_LIMIT + 1), { cellsBefore: [], cellsAfter: [], rowsBefore: [before], rowsAfter: [after] }],
+        redoStack: [],
+      });
+      commit([], [after]);
     },
 
     async addRow(panel) {

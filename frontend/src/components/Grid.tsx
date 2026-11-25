@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { Panel, RowField } from "@/lib/api";
 import { parseTsv, toHtmlTable, toTsv } from "@/lib/clipboard";
 import { daysBetween, formatDayHeader, isFirstOfMonth, todayIso } from "@/lib/dates";
+import { ROW_STATUSES, statusFill } from "@/lib/status";
 import {
   cellKey,
   dayCol,
@@ -970,10 +971,38 @@ export default function Grid({ panel, frozen }: Props) {
     });
   };
 
+  const clickedField = menu && menu.c >= 0 && menu.c < K ? frozen[menu.c].field : null;
+  const canSetStatus =
+    !!mapRow && (clickedField === "driver" || clickedField === "tractor" || clickedField === "trailer");
   const menuItems: MenuItem[] = [
     ...(hasVehicleCols
       ? [
           { label: "Показать на карте", disabled: !mapUnits.length, onClick: showOnMap } satisfies MenuItem,
+          { separator: true } satisfies MenuItem,
+        ]
+      : []),
+    ...(canSetStatus && mapRow
+      ? [
+          {
+            label: "Статус",
+            children: [
+              ...ROW_STATUSES.map(
+                (s) =>
+                  ({
+                    label: s.label,
+                    swatch: s.fill,
+                    hint: mapRow.status === s.id ? "✓" : undefined,
+                    onClick: () => useStore.getState().setRowStatus(mapRow.id, s.id),
+                  }) satisfies MenuItem,
+              ),
+              { separator: true } satisfies MenuItem,
+              {
+                label: "Убрать статус",
+                disabled: !mapRow.status,
+                onClick: () => useStore.getState().setRowStatus(mapRow.id, ""),
+              },
+            ],
+          } satisfies MenuItem,
           { separator: true } satisfies MenuItem,
         ]
       : []),
@@ -1139,13 +1168,21 @@ export default function Grid({ panel, frozen }: Props) {
         {r + 1}
       </div>,
     );
+    const fill = statusFill(row?.status);
     frozen.forEach((f, i) => {
       const v = row?.[f.field] ?? "";
+      const colored = fill && (f.field === "driver" || f.field === "tractor" || f.field === "trailer");
       leftCells.push(
         <div
           key={`${id}|${f.field}`}
           className={styles.frozenCell}
-          style={{ top: r * rowH, left: gutterW + frozenX[i], width: scaled(f.width), height: rowH }}
+          style={{
+            top: r * rowH,
+            left: gutterW + frozenX[i],
+            width: scaled(f.width),
+            height: rowH,
+            background: colored ? fill : undefined,
+          }}
           title={v.length > 20 ? v : undefined}
         >
           <span>{v}</span>

@@ -13,14 +13,6 @@
   scrollbar-width: none;
 }
 
-.brand {
-  font-weight: 700;
-  font-size: 15px;
-  color: #1f1f1f;
-  margin-right: 6px;
-  white-space: nowrap;
-}
-
 .group {
   position: relative;
   display: flex;
@@ -28,6 +20,11 @@
   gap: 4px;
   padding-left: 10px;
   border-left: 1px solid #e0e3e7;
+}
+
+.toolbar > .group:first-child {
+  border-left: 0;
+  padding-left: 0;
 }
 
 .group button,
