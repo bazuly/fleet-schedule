@@ -71,6 +71,12 @@ export interface ClipboardData {
 
 export type WsStatus = "connecting" | "online" | "offline";
 
+export interface MapTarget {
+  rowId: string;
+  title: string;
+  units: { kind: "tractor" | "trailer"; text: string }[];
+}
+
 interface State {
   user: User | null;
   rows: Record<string, Row>;
@@ -87,6 +93,7 @@ interface State {
   syncScroll: boolean;
   /** 1 = 100%, как в Google Таблицах. */
   zoom: number;
+  mapTarget: MapTarget | null;
 
   setUser(u: User | null): void;
   setRange(from: string, to: string): Promise<void>;
@@ -107,6 +114,7 @@ interface State {
   setSyncScroll(v: boolean): void;
   setZoom(z: number): void;
   stepZoom(dir: 1 | -1): void;
+  setMapTarget(t: MapTarget | null): void;
   applyBgToActive(bg: string | null): void;
 
   addRow(panel: Panel): Promise<void>;
@@ -177,6 +185,7 @@ export const useStore = create<State>((set, get) => {
     active: null,
     syncScroll: true,
     zoom: 1,
+    mapTarget: null,
 
     setUser: (user) => set({ user }),
 
@@ -320,6 +329,7 @@ export const useStore = create<State>((set, get) => {
       const index = Math.max(0, ZOOMS.indexOf(current));
       get().setZoom(ZOOMS[Math.min(ZOOMS.length - 1, Math.max(0, index + dir))]);
     },
+    setMapTarget: (mapTarget) => set({ mapTarget }),
 
     applyBgToActive(bg) {
       const a = get().active;

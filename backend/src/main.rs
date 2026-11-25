@@ -1,4 +1,5 @@
 mod auth;
+mod axenta;
 mod cells;
 mod error;
 mod models;
@@ -39,6 +40,9 @@ async fn main() -> anyhow::Result<()> {
     sqlx::migrate!("./migrations").run(&db).await?;
 
     let state = AppState::new(db);
+    if state.axenta.is_none() {
+        tracing::warn!("AXENTA_USERNAME/AXENTA_PASSWORD не заданы — карта транспорта отключена");
+    }
     auth::seed_admin(&state).await?;
 
     let api = Router::new()
@@ -52,6 +56,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/rows", get(rows::list).post(rows::create).patch(rows::patch_many))
         .route("/rows/{id}", delete(rows::delete))
         .route("/cells", get(cells::list).put(cells::put))
+        .route("/navigation/locate", get(axenta::locate))
         .route("/ws", get(ws::handler));
 
     let cors = CorsLayer::new()

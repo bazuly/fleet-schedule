@@ -111,7 +111,30 @@ export const api = {
   cells: (from: string, to: string) =>
     request<Cell[]>("GET", `/cells?from=${from}&to=${to}`),
   putCells: (cells: Cell[]) => request("PUT", "/cells", { cells }),
+
+  locate: (plates: string[]) =>
+    request<Located[]>("GET", `/navigation/locate?plates=${encodeURIComponent(plates.join(","))}`),
 };
+
+export interface NavVehicle {
+  id: number;
+  name: string;
+  lat: number | null;
+  lon: number | null;
+  speed: number | null;
+  course: number | null;
+  position_time: string | null;
+  message_time: string | null;
+  moving: boolean | null;
+  ignition: boolean | null;
+}
+
+export interface Located {
+  query: string;
+  /** Номер, распознанный в тексте ячейки. Пусто — номера в тексте нет. */
+  plate: string | null;
+  vehicle: NavVehicle | null;
+}
 
 export function wsUrl(): string {
   return `${API_URL.replace(/^http/, "ws")}/api/ws?token=${encodeURIComponent(tokenStore.get() ?? "")}`;

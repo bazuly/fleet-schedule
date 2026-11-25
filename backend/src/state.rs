@@ -1,10 +1,15 @@
+use std::sync::Arc;
+
 use chrono::NaiveDate;
 use serde::Serialize;
 use sqlx::PgPool;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::models::{Cell, Row};
+use crate::{
+    axenta::Axenta,
+    models::{Cell, Row},
+};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -26,12 +31,14 @@ pub fn client_id(headers: &axum::http::HeaderMap) -> Option<String> {
 pub struct AppState {
     pub db: PgPool,
     pub events: broadcast::Sender<Event>,
+    /// Пусто, если в окружении нет логина и пароля Axenta.
+    pub axenta: Option<Arc<Axenta>>,
 }
 
 impl AppState {
     pub fn new(db: PgPool) -> Self {
         let (events, _) = broadcast::channel(1024);
-        Self { db, events }
+        Self { db, events, axenta: Axenta::from_env().map(Arc::new) }
     }
 
     pub fn publish(&self, event: Event) {

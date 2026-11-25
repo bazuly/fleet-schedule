@@ -7,6 +7,7 @@ import { connectRealtime } from "@/lib/realtime";
 import { useStore } from "@/lib/store";
 import FloatingWindow, { type WindowGeometry } from "./FloatingWindow";
 import Grid, { type FrozenCol } from "./Grid";
+import MapView from "./MapView";
 import Toolbar, { FormulaBar, type PanelKey } from "./Toolbar";
 import styles from "./Workspace.module.css";
 
@@ -35,6 +36,22 @@ interface WindowsState {
 }
 
 const WINDOWS_KEY = "fleet.windows";
+const MAP_WINDOW_KEY = "fleet.mapWindow";
+
+function loadMapGeometry(): WindowGeometry {
+  const w = typeof window === "undefined" ? 1400 : window.innerWidth;
+  const h = typeof window === "undefined" ? 900 : window.innerHeight;
+  const width = Math.min(720, w - 80);
+  const height = Math.min(520, h - 140);
+  const defaults = { x: Math.max(20, w - width - 40), y: 110, w: width, h: height, collapsed: false };
+  if (typeof window === "undefined") return defaults;
+  try {
+    const saved = localStorage.getItem(MAP_WINDOW_KEY);
+    return saved ? { ...defaults, ...JSON.parse(saved) } : defaults;
+  } catch {
+    return defaults;
+  }
+}
 
 function defaultWindows(): WindowsState {
   const w = typeof window === "undefined" ? 1400 : window.innerWidth;
@@ -65,6 +82,9 @@ export default function Workspace() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
   const [windows, setWindows] = useState<WindowsState>(loadWindows);
+  const [mapGeometry, setMapGeometry] = useState<WindowGeometry>(loadMapGeometry);
+  const [mapOnTop, setMapOnTop] = useState(true);
+  const mapTarget = useStore((s) => s.mapTarget);
   const toast = useStore((s) => s.toast);
   const loading = useStore((s) => s.loading);
 
@@ -97,10 +117,17 @@ export default function Workspace() {
   }, []);
 
   const bringToFront = useCallback(
-    (p: PanelKey) =>
-      updateWindows((w) => (w.order[w.order.length - 1] === p ? w : { ...w, order: [...w.order.filter((x) => x !== p), p] })),
+    (p: PanelKey) => {
+      setMapOnTop(false);
+      updateWindows((w) => (w.order[w.order.length - 1] === p ? w : { ...w, order: [...w.order.filter((x) => x !== p), p] }));
+    },
     [updateWindows],
   );
+
+  const changeMapGeometry = useCallback((g: WindowGeometry) => {
+    localStorage.setItem(MAP_WINDOW_KEY, JSON.stringify(g));
+    setMapGeometry(g);
+  }, []);
 
   const toggle = (p: PanelKey) => {
     updateWindows((w) => ({ ...w, visible: { ...w.visible, [p]: !w.visible[p] } }));
@@ -135,6 +162,20 @@ export default function Workspace() {
               <Grid panel={p} frozen={POOL_COLUMNS} />
             </FloatingWindow>
           ),
+      )}
+
+      {mapTarget && (
+        <FloatingWindow
+          title={`НА КАРТЕ — ${mapTarget.title}`}
+          accent="#7e57c2"
+          geometry={mapGeometry}
+          zIndex={mapOnTop ? 150 : 99}
+          onFocus={() => setMapOnTop(true)}
+          onChange={changeMapGeometry}
+          onClose={() => useStore.getState().setMapTarget(null)}
+        >
+          <MapView target={mapTarget} />
+        </FloatingWindow>
       )}
 
       {toast && <div className={styles.toast}>{toast}</div>}

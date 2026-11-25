@@ -1,0 +1,140 @@
+.root {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.units {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #dadce0;
+  background: #fff;
+  flex-shrink: 0;
+}
+
+.unit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid #dadce0;
+  border-radius: 6px;
+  background: #fff;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.unit:hover:not(:disabled) {
+  background: #f1f3f4;
+}
+
+.unit:disabled {
+  cursor: default;
+}
+
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.kind {
+  color: #5f6368;
+}
+
+.plate {
+  font-weight: 600;
+  color: #202124;
+}
+
+.status {
+  color: #188038;
+}
+
+.statusMissing {
+  color: #c5221f;
+}
+
+.map {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: #e8eaed;
+}
+
+.error {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  z-index: 1000;
+  transform: translateX(-50%);
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #fce8e6;
+  border: 1px solid #f28b82;
+  color: #a50e0e;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.markerWrap {
+  background: transparent;
+  border: 0;
+}
+
+.marker {
+  position: relative;
+  width: 0;
+  height: 0;
+}
+
+.dot {
+  position: absolute;
+  left: -8px;
+  top: -8px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--c);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  box-sizing: border-box;
+}
+
+.arrow {
+  position: absolute;
+  left: -14px;
+  top: -14px;
+  width: 28px;
+  height: 28px;
+}
+
+.arrow::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -3px;
+  transform: translateX(-50%);
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 9px solid var(--c);
+}
+
+.label {
+  position: absolute;
+  left: 12px;
+  top: -10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #fff;
+  border: 1px solid var(--c);
+  color: #202124;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}

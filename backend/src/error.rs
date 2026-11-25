@@ -17,6 +17,8 @@ pub enum AppError {
     BadRequest(String),
     #[error("{0}")]
     Conflict(String),
+    #[error("{0}")]
+    Unavailable(String),
     #[error(transparent)]
     Db(#[from] sqlx::Error),
     #[error(transparent)]
@@ -31,6 +33,7 @@ impl IntoResponse for AppError {
             AppError::NotFound => StatusCode::NOT_FOUND,
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
             AppError::Conflict(_) => StatusCode::CONFLICT,
+            AppError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             AppError::Db(sqlx::Error::RowNotFound) => StatusCode::NOT_FOUND,
             AppError::Db(_) | AppError::Other(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };

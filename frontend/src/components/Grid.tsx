@@ -964,7 +964,29 @@ export default function Grid({ panel, frozen }: Props) {
     }
     applyEdits(edits);
   };
+  const hasVehicleCols = frozen.some((f) => f.field === "tractor" || f.field === "trailer");
+  const mapRow = menu && menu.r >= 0 && menu.r < N ? rows[rowIds[menu.r]] : null;
+  const mapUnits = mapRow
+    ? (["tractor", "trailer"] as const)
+        .map((kind) => ({ kind, text: mapRow[kind].trim() }))
+        .filter((u) => u.text)
+    : [];
+  const showOnMap = () => {
+    if (!mapRow || !mapUnits.length) return;
+    useStore.getState().setMapTarget({
+      rowId: mapRow.id,
+      title: mapRow.driver.split("\n")[0].trim() || mapUnits[0].text,
+      units: mapUnits,
+    });
+  };
+
   const menuItems: MenuItem[] = [
+    ...(hasVehicleCols
+      ? [
+          { label: "Показать на карте", disabled: !mapUnits.length, onClick: showOnMap } satisfies MenuItem,
+          { separator: true } satisfies MenuItem,
+        ]
+      : []),
     { label: "Вырезать", hint: "⌘X", onClick: () => doCopy(true) },
     { label: "Копировать", hint: "⌘C", onClick: () => doCopy(false) },
     {
