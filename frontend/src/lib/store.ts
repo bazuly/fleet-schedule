@@ -22,6 +22,9 @@ export interface CellData {
   comment: string;
   /** Сколько дней занимает ячейка. 1 — обычная клетка. */
   span: number;
+  updated_by?: string | null;
+  updated_by_name?: string | null;
+  updated_at?: string | null;
 }
 
 export const EMPTY_CELL: CellData = { value: "", bg: null, fg: null, comment: "", span: 1 };
@@ -31,7 +34,16 @@ export function isBlank(c: CellData): boolean {
 }
 
 export function toCellData(c: Cell): CellData {
-  return { value: c.value, bg: c.bg, fg: c.fg, comment: c.comment ?? "", span: c.span || 1 };
+  return {
+    value: c.value,
+    bg: c.bg,
+    fg: c.fg,
+    comment: c.comment ?? "",
+    span: c.span || 1,
+    updated_by: c.updated_by ?? null,
+    updated_by_name: c.updated_by_name ?? null,
+    updated_at: c.updated_at ?? null,
+  };
 }
 
 export interface Edit {
@@ -164,15 +176,23 @@ export const useStore = create<State>((set, get) => {
   /** Применяет пакет локально и отправляет его на сервер. */
   function commit(cells: Cell[], patches: RowPatch[]) {
     if (cells.length) {
+      const user = get().user;
+      const at = new Date().toISOString();
+      const name = user?.name?.trim() || user?.login || null;
+      const stamped = cells.map((c) => {
+        const data = toCellData(c);
+        if (isBlank(data)) return c;
+        return { ...c, updated_by: user?.id ?? null, updated_by_name: name, updated_at: at };
+      });
       const next = new Map(get().cells);
-      for (const c of cells) {
+      for (const c of stamped) {
         const k = cellKey(c.row_id, c.day);
         const data = toCellData(c);
         if (isBlank(data)) next.delete(k);
         else next.set(k, data);
       }
       set({ cells: next });
-      api.putCells(cells).catch((e) => {
+      api.putCells(stamped).catch((e) => {
         get().showToast(`Не удалось сохранить: ${e.message}`);
         void get().loadAll();
       });

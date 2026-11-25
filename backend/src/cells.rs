@@ -3,15 +3,16 @@ use axum::{
     extract::{Query, State},
     http::HeaderMap,
 };
-use chrono::NaiveDate;
-use serde::Deserialize;
+use chrono::{DateTime, NaiveDate, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sqlx::Postgres;
 use uuid::Uuid;
 
 use crate::{
     auth::AuthUser,
     error::{AppError, AppResult},
-    models::Cell,
+    models::{Cell, User},
     state::{AppState, Event, client_id, parse_day},
 };
 
@@ -35,7 +36,13 @@ pub async fn list(
         return Err(AppError::BadRequest("invalid date range".into()));
     }
     let cells = sqlx::query_as::<_, Cell>(
-        "SELECT row_id, day, value, bg, fg, comment, span FROM cells WHERE day BETWEEN $1 AND $2",
+        "SELECT c.row_id, c.day, c.value, c.bg, c.fg, c.comment, c.span,
+                c.updated_by,
+                COALESCE(NULLIF(btrim(u.name), ''), u.login) AS updated_by_name,
+                c.updated_at
+         FROM cells c
+         LEFT JOIN users u ON u.id = c.updated_by
+         WHERE c.day BETWEEN $1 AND $2",
     )
     .bind(from)
     .bind(to)
@@ -91,7 +98,25 @@ pub async fn put(
         normalized.push(c);
     }
 
+    let changed_at = Utc::now();
+    let user_name = display_name(&user);
     let mut tx = state.db.begin().await?;
+    record_history(
+        &mut tx,
+        &delete_rows,
+        &delete_days,
+        &upsert_rows,
+        &upsert_days,
+        &upsert_values,
+        &upsert_bgs,
+        &upsert_fgs,
+        &upsert_comments,
+        &upsert_spans,
+        user.id,
+        &user_name,
+        changed_at,
+    )
+    .await?;
     if !delete_rows.is_empty() {
         sqlx::query(
             "DELETE FROM cells c
@@ -106,7 +131,7 @@ pub async fn put(
     if !upsert_rows.is_empty() {
         sqlx::query(
             "INSERT INTO cells (row_id, day, value, bg, fg, comment, span, updated_by, updated_at)
-             SELECT d.row_id, d.day, d.value, d.bg, d.fg, d.comment, d.span, $8, now()
+             SELECT d.row_id, d.day, d.value, d.bg, d.fg, d.comment, d.span, $8, $9
              FROM UNNEST($1::uuid[], $2::date[], $3::text[], $4::text[], $5::text[], $6::text[], $7::int[])
                 AS d(row_id, day, value, bg, fg, comment, span)
              WHERE EXISTS (SELECT 1 FROM schedule_rows r WHERE r.id = d.row_id)
@@ -127,10 +152,20 @@ pub async fn put(
         .bind(&upsert_comments)
         .bind(&upsert_spans)
         .bind(user.id)
+        .bind(changed_at)
         .execute(&mut *tx)
         .await?;
     }
     tx.commit().await?;
+
+    for cell in &mut normalized {
+        if cell_is_blank(cell) {
+            continue;
+        }
+        cell.updated_by = Some(user.id);
+        cell.updated_by_name = Some(user_name.clone());
+        cell.updated_at = Some(changed_at);
+    }
 
     let count = normalized.len();
     if count > 0 {
@@ -141,4 +176,118 @@ pub async fn put(
         });
     }
     Ok(Json(json!({ "ok": true, "count": count })))
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct CellChange {
+    pub id: i64,
+    pub user_name: String,
+    pub changed_at: DateTime<Utc>,
+    pub value: String,
+    pub comment: String,
+    pub bg: Option<String>,
+    pub fg: Option<String>,
+    pub span: i32,
+    pub deleted: bool,
+}
+
+#[derive(Deserialize)]
+pub struct HistoryQuery {
+    row_id: Uuid,
+    day: String,
+}
+
+/// Последние правки одной клетки, новые сверху.
+pub async fn history(
+    State(state): State<AppState>,
+    AuthUser(_): AuthUser,
+    Query(q): Query<HistoryQuery>,
+) -> AppResult<Json<Vec<CellChange>>> {
+    let day = parse_day(&q.day)?;
+    let changes = sqlx::query_as::<_, CellChange>(
+        "SELECT id, user_name, changed_at, value, comment, bg, fg, span, deleted
+         FROM cell_changes
+         WHERE row_id = $1 AND day = $2
+         ORDER BY changed_at DESC, id DESC
+         LIMIT 50",
+    )
+    .bind(q.row_id)
+    .bind(day)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(changes))
+}
+
+fn display_name(user: &User) -> String {
+    let name = user.name.trim();
+    if name.is_empty() { user.login.clone() } else { name.to_string() }
+}
+
+fn cell_is_blank(cell: &Cell) -> bool {
+    cell.span <= 1 && cell.value.is_empty() && cell.bg.is_none() && cell.fg.is_none() && cell.comment.is_empty()
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn record_history(
+    tx: &mut sqlx::Transaction<'_, Postgres>,
+    delete_rows: &[Uuid],
+    delete_days: &[NaiveDate],
+    upsert_rows: &[Uuid],
+    upsert_days: &[NaiveDate],
+    upsert_values: &[String],
+    upsert_bgs: &[Option<String>],
+    upsert_fgs: &[Option<String>],
+    upsert_comments: &[String],
+    upsert_spans: &[i32],
+    user_id: Uuid,
+    user_name: &str,
+    changed_at: DateTime<Utc>,
+) -> Result<(), sqlx::Error> {
+    if !delete_rows.is_empty() {
+        sqlx::query(
+            "INSERT INTO cell_changes
+                (row_id, day, user_id, user_name, changed_at, value, comment, bg, fg, span, deleted)
+             SELECT c.row_id, c.day, $3, $4, $5, c.value, c.comment, c.bg, c.fg, c.span, true
+             FROM cells c
+             JOIN UNNEST($1::uuid[], $2::date[]) AS d(row_id, day)
+               ON c.row_id = d.row_id AND c.day = d.day",
+        )
+        .bind(delete_rows)
+        .bind(delete_days)
+        .bind(user_id)
+        .bind(user_name)
+        .bind(changed_at)
+        .execute(&mut **tx)
+        .await?;
+    }
+    if !upsert_rows.is_empty() {
+        sqlx::query(
+            "INSERT INTO cell_changes
+                (row_id, day, user_id, user_name, changed_at, value, comment, bg, fg, span, deleted)
+             SELECT d.row_id, d.day, $8, $9, $10, d.value, d.comment, d.bg, d.fg, d.span, false
+             FROM UNNEST($1::uuid[], $2::date[], $3::text[], $4::text[], $5::text[], $6::text[], $7::int[])
+                AS d(row_id, day, value, bg, fg, comment, span)
+             LEFT JOIN cells c ON c.row_id = d.row_id AND c.day = d.day
+             WHERE EXISTS (SELECT 1 FROM schedule_rows r WHERE r.id = d.row_id)
+               AND (c.row_id IS NULL
+                OR c.value IS DISTINCT FROM d.value
+                OR c.comment IS DISTINCT FROM d.comment
+                OR c.bg IS DISTINCT FROM d.bg
+                OR c.fg IS DISTINCT FROM d.fg
+                OR c.span IS DISTINCT FROM d.span)",
+        )
+        .bind(upsert_rows)
+        .bind(upsert_days)
+        .bind(upsert_values)
+        .bind(upsert_bgs)
+        .bind(upsert_fgs)
+        .bind(upsert_comments)
+        .bind(upsert_spans)
+        .bind(user_id)
+        .bind(user_name)
+        .bind(changed_at)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
 }

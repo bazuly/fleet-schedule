@@ -57,6 +57,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/rows", get(rows::list).post(rows::create).patch(rows::patch_many))
         .route("/rows/{id}", delete(rows::delete))
         .route("/cells", get(cells::list).put(cells::put))
+        .route("/cells/history", get(cells::history))
         .route("/calendar", get(calendar::get).put(calendar::put))
         .route("/navigation/locate", get(axenta::locate))
         .route("/ws", get(ws::handler));

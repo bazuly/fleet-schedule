@@ -32,6 +32,21 @@ export interface Cell {
   comment: string;
   /** Сколько дней занимает ячейка, начиная с этой даты. */
   span: number;
+  updated_by?: string | null;
+  updated_by_name?: string | null;
+  updated_at?: string | null;
+}
+
+export interface CellChange {
+  id: number;
+  user_name: string;
+  changed_at: string;
+  value: string;
+  comment: string;
+  bg: string | null;
+  fg: string | null;
+  span: number;
+  deleted: boolean;
 }
 
 export type RowPatch = { id: string } & Partial<Pick<Row, RowField | "position" | "status">>;
@@ -120,6 +135,8 @@ export const api = {
   cells: (from: string, to: string) =>
     request<Cell[]>("GET", `/cells?from=${from}&to=${to}`),
   putCells: (cells: Cell[]) => request("PUT", "/cells", { cells }),
+  cellHistory: (rowId: string, day: string) =>
+    request<CellChange[]>("GET", `/cells/history?row_id=${encodeURIComponent(rowId)}&day=${day}`),
 
   calendar: () => request<CalendarView | null>("GET", "/calendar"),
   saveCalendar: (view: CalendarView) => request<CalendarView>("PUT", "/calendar", view),

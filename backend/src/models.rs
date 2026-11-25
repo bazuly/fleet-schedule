@@ -1,4 +1,4 @@
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -33,6 +33,13 @@ pub struct Cell {
     /// Сколько дней занимает ячейка. Продолжения отдельными строками не хранятся.
     #[serde(default = "default_span")]
     pub span: i32,
+    /// Кто последним менял клетку. Пусто у записей, загруженных до истории.
+    #[serde(default)]
+    pub updated_by: Option<Uuid>,
+    #[serde(default)]
+    pub updated_by_name: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 fn default_span() -> i32 {

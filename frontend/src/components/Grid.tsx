@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Panel, RowField } from "@/lib/api";
 import { parseTsv, toHtmlTable, toTsv } from "@/lib/clipboard";
-import { daysBetween, formatDayHeader, isFirstOfMonth, todayIso } from "@/lib/dates";
+import { daysBetween, formatChangedAt, formatDayHeader, isFirstOfMonth, todayIso } from "@/lib/dates";
 import { ROW_STATUSES, statusFill } from "@/lib/status";
 import {
   cellKey,
@@ -12,9 +12,11 @@ import {
   scrollBus,
   sortedRowIds,
   useStore,
+  type CellData,
   type ColKey,
   type Edit,
 } from "@/lib/store";
+import CellHistory from "./CellHistory";
 import CommentBox from "./CommentBox";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import styles from "./Grid.module.css";
@@ -40,6 +42,14 @@ type Pos = { r: number; c: number };
 type Sel = { anchor: Pos; focus: Pos };
 type Editing = { r: number; c: number; value: string; mode: "quick" | "full" };
 type Drag = { kind: "select" } | { kind: "fill"; target: Pos };
+
+function cellTip(data: CellData): string {
+  const who =
+    data.updated_by_name && data.updated_at
+      ? `Изменил ${data.updated_by_name}, ${formatChangedAt(data.updated_at)}`
+      : "";
+  return [data.comment, who].filter(Boolean).join("\n\n");
+}
 
 /** Браузер прокручивает overflow:hidden-контейнеры, показывая фокусный элемент, и панели разъезжаются. */
 function resetScroll(e: React.UIEvent<HTMLElement>) {
@@ -106,6 +116,7 @@ export default function Grid({ panel, frozen }: Props) {
   const [drag, setDrag] = useState<Drag | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; r: number; c: number } | null>(null);
   const [noteEdit, setNoteEdit] = useState<{ r: number; c: number; x: number; y: number } | null>(null);
+  const [history, setHistory] = useState<{ x: number; y: number; rowId: string; day: string } | null>(null);
   const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null);
   const [focused, setFocused] = useState(false);
   const suppressSyncRef = useRef(false);
@@ -1050,6 +1061,19 @@ export default function Grid({ panel, frozen }: Props) {
           } satisfies MenuItem,
         ]
       : []),
+    {
+      label: "История изменений",
+      disabled: !commentTarget,
+      onClick: () => {
+        if (!commentTarget || !menu) return;
+        setHistory({
+          x: menu.x,
+          y: menu.y,
+          rowId: rowIds[commentTarget.r],
+          day: days[commentTarget.c - K],
+        });
+      },
+    },
     { separator: true },
     { label: "Объединить ячейки", disabled: !daySelection, onClick: mergeSelection },
     { label: "Разъединить ячейки", disabled: !selectionHasMerge, onClick: unmergeSelection },
@@ -1104,6 +1128,7 @@ export default function Grid({ panel, frozen }: Props) {
       if (block.c0 !== K + d) continue;
       const span = block.c1 - block.c0 + 1;
       if (d + span - 1 < d0v) continue;
+      const tipText = cellTip(data);
       bodyCells.push(
         <div
           key={`${id}|${d}`}
@@ -1116,12 +1141,8 @@ export default function Grid({ panel, frozen }: Props) {
             background: data.bg || (span > 1 ? "#fff" : undefined),
             zIndex: span > 1 || data.value ? 2 : 1,
           }}
-          onMouseEnter={
-            data.comment
-              ? (e) => setTip({ x: e.clientX + 14, y: e.clientY + 18, text: data.comment })
-              : undefined
-          }
-          onMouseLeave={data.comment ? () => setTip(null) : undefined}
+          onMouseEnter={tipText ? (e) => setTip({ x: e.clientX + 14, y: e.clientY + 18, text: tipText }) : undefined}
+          onMouseLeave={tipText ? () => setTip(null) : undefined}
         >
           {data.comment && <span className={styles.noteMark} />}
           {data.value && (
@@ -1374,6 +1395,15 @@ export default function Grid({ panel, frozen }: Props) {
       </div>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
+      {history && (
+        <CellHistory
+          x={history.x}
+          y={history.y}
+          rowId={history.rowId}
+          day={history.day}
+          onClose={() => setHistory(null)}
+        />
+      )}
       {noteEdit && rowIds[noteEdit.r] && noteEdit.c >= K && (
         <CommentBox
           x={noteEdit.x}
@@ -1386,7 +1416,7 @@ export default function Grid({ panel, frozen }: Props) {
           }}
         />
       )}
-      {tip && !noteEdit && (
+      {tip && !noteEdit && !history && !menu && (
         <div className={styles.tip} style={{ left: tip.x, top: tip.y }}>
           {tip.text}
         </div>

@@ -42,3 +42,15 @@ export function formatDayHeader(iso: string): { date: string; weekday: string; w
 export function isFirstOfMonth(iso: string): boolean {
   return iso.endsWith("-01");
 }
+
+/** Время правки в местном часовом поясе: «25 нояб., 19:41». */
+export function formatChangedAt(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString("ru-RU", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}

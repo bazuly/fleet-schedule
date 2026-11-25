@@ -165,6 +165,13 @@
   color: #5f6368;
 }
 
+.pendingPanel {
+  padding: 4px 12px 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: #80868b;
+}
+
 .pendingMenu button {
   height: auto;
   width: 100%;
@@ -183,6 +190,23 @@
   color: #1a73e8;
   font-size: 11px;
   font-weight: 700;
+}
+
+.pendingLate {
+  color: #c5221f;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.pendingMenu button.pendingMore {
+  flex-direction: row;
+  justify-content: flex-start;
+  margin: 4px 8px 6px;
+  width: calc(100% - 16px);
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: #1a73e8;
+  font-weight: 600;
 }
 
 .pendingText {

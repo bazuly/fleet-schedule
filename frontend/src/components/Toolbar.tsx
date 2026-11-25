@@ -4,8 +4,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, tokenStore } from "@/lib/api";
-import { addDays, todayIso } from "@/lib/dates";
-import { pendingTasks, type PendingTask } from "@/lib/pending";
+import { todayIso } from "@/lib/dates";
+import { isRecentOverdue, pendingDayLabel, pendingTasks, type PendingTask } from "@/lib/pending";
 import { colDay, isDayCol, scrollBus, useStore, ZOOMS } from "@/lib/store";
 import styles from "./Toolbar.module.css";
 
@@ -52,6 +52,8 @@ export default function Toolbar({ visible, onToggle }: Props) {
   const cells = useStore((s) => s.cells);
   const today = todayIso();
   const pending = useMemo(() => pendingTasks(rows, cells, today), [rows, cells, today]);
+  const attention = pending.filter((task) => task.bucket !== "overdue" || isRecentOverdue(task, today)).length;
+  const badgeCount = attention || pending.length;
   const active = useStore((s) => s.active);
   const canMerge = (active?.colKeys.filter(isDayCol).length ?? 0) > 1;
   const paletteOpen = palette !== null;
@@ -113,7 +115,7 @@ export default function Toolbar({ visible, onToggle }: Props) {
             <button
               onMouseDown={keepFocus}
               className={styles.bell}
-              title="Не запланировано на сегодня и завтра"
+              title="Не запланировано: сегодня, завтра и просроченные"
               onClick={() => {
                 const rect = bellRef.current?.getBoundingClientRect();
                 if (rect) {
@@ -126,7 +128,7 @@ export default function Toolbar({ visible, onToggle }: Props) {
               }}
             >
               <span aria-hidden>🔔</span>
-              <span className={styles.badge}>{pending.length > 99 ? "99+" : pending.length}</span>
+              <span className={styles.badge}>{badgeCount > 99 ? "99+" : badgeCount}</span>
             </button>
             {bellOpen && bellBox && (
               <PendingMenu
@@ -310,15 +312,16 @@ export default function Toolbar({ visible, onToggle }: Props) {
   );
 }
 
-function dayLabel(days: string[], today: string): string {
-  const names = days.map((day) => (day === today ? "сегодня" : day === addDays(today, 1) ? "завтра" : day));
-  return names.join(" и ");
-}
-
 const PANEL_LABEL: Record<PendingTask["panel"], string> = {
   unassigned: "Нераспределённое",
   pickups: "Заборы продукции",
 };
+
+const BUCKETS: { id: PendingTask["bucket"]; title: string }[] = [
+  { id: "today", title: "Сегодня" },
+  { id: "tomorrow", title: "Завтра" },
+  { id: "overdue", title: "Просрочено" },
+];
 
 function PendingMenu({
   tasks,
@@ -335,6 +338,7 @@ function PendingMenu({
   onToggle(panel: PanelKey): void;
   onClose(): void;
 }) {
+  const [showOlder, setShowOlder] = useState(false);
   const open = (task: PendingTask) => {
     const day = task.days[0];
     if (!visible[task.panel]) {
@@ -346,26 +350,59 @@ function PendingMenu({
     onClose();
   };
 
+  const overdue = tasks.filter((task) => task.bucket === "overdue");
+  const recentOverdue = overdue.filter((task) => isRecentOverdue(task, today));
+  const olderOverdue = overdue.filter((task) => !isRecentOverdue(task, today));
+
   return (
     <div className={styles.pendingMenu} style={{ left: box.left, top: box.top }}>
       <div className={styles.pendingHead}>Не запланировано</div>
-      {(["unassigned", "pickups"] as const).map((panel) => {
-        const list = tasks.filter((t) => t.panel === panel);
-        if (!list.length) return null;
+      {BUCKETS.map((bucket) => {
+        const list =
+          bucket.id === "overdue" ? (showOlder ? overdue : recentOverdue) : tasks.filter((task) => task.bucket === bucket.id);
+        if (!list.length && !(bucket.id === "overdue" && olderOverdue.length)) return null;
         return (
-          <div key={panel}>
-            <div className={styles.pendingSection}>{PANEL_LABEL[panel]}</div>
-            {list.map((task) => (
-              <button key={`${task.rowId}|${task.anchor}`} className={styles.pendingItem} onClick={() => open(task)}>
-                <span className={styles.pendingWhen}>{dayLabel(task.days, today)}</span>
-                <span className={styles.pendingText}>{task.value}</span>
+          <div key={bucket.id}>
+            <div className={styles.pendingSection}>{bucket.title}</div>
+            <TaskGroups tasks={list} today={today} late={bucket.id === "overdue"} onOpen={open} />
+            {bucket.id === "overdue" && olderOverdue.length > 0 && (
+              <button className={styles.pendingMore} onClick={() => setShowOlder((v) => !v)}>
+                {showOlder ? "Скрыть ранние" : `Ещё раньше (${olderOverdue.length})`}
               </button>
-            ))}
+            )}
           </div>
         );
       })}
     </div>
   );
+}
+
+function TaskGroups({
+  tasks,
+  today,
+  late,
+  onOpen,
+}: {
+  tasks: PendingTask[];
+  today: string;
+  late: boolean;
+  onOpen(task: PendingTask): void;
+}) {
+  return (["unassigned", "pickups"] as const).map((panel) => {
+    const list = tasks.filter((task) => task.panel === panel);
+    if (!list.length) return null;
+    return (
+      <div key={panel}>
+        <div className={styles.pendingPanel}>{PANEL_LABEL[panel]}</div>
+        {list.map((task) => (
+          <button key={`${task.rowId}|${task.anchor}`} className={styles.pendingItem} onClick={() => onOpen(task)}>
+            <span className={late ? styles.pendingLate : styles.pendingWhen}>{pendingDayLabel(task.days, today)}</span>
+            <span className={styles.pendingText}>{task.value}</span>
+          </button>
+        ))}
+      </div>
+    );
+  });
 }
 
 function RangeInputs(props: { from: string; to: string }) {
