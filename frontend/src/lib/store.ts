@@ -95,7 +95,7 @@ interface State {
   syncScroll: boolean;
   /** 1 = 100%, как в Google Таблицах. */
   zoom: number;
-  mapTarget: MapTarget | null;
+  mapTargets: MapTarget[];
 
   setUser(u: User | null): void;
   setRange(from: string, to: string): Promise<void>;
@@ -118,7 +118,8 @@ interface State {
   setSyncScroll(v: boolean): void;
   setZoom(z: number): void;
   stepZoom(dir: 1 | -1): void;
-  setMapTarget(t: MapTarget | null): void;
+  openMap(t: MapTarget): void;
+  closeMap(rowId: string): void;
   applyBgToActive(bg: string | null): void;
   applyFgToActive(fg: string | null): void;
   mergeActive(): void;
@@ -204,7 +205,7 @@ export const useStore = create<State>((set, get) => {
     active: null,
     syncScroll: true,
     zoom: 1,
-    mapTarget: null,
+    mapTargets: [],
 
     setUser: (user) => set({ user }),
 
@@ -295,7 +296,7 @@ export const useStore = create<State>((set, get) => {
       delete rows[id];
       const cells = new Map(get().cells);
       for (const k of cells.keys()) if (k.startsWith(`${id}|`)) cells.delete(k);
-      set({ rows, cells });
+      set({ rows, cells, mapTargets: get().mapTargets.filter((t) => t.rowId !== id) });
     },
 
     applyEdits(edits) {
@@ -378,7 +379,13 @@ export const useStore = create<State>((set, get) => {
       const index = Math.max(0, ZOOMS.indexOf(current));
       get().setZoom(ZOOMS[Math.min(ZOOMS.length - 1, Math.max(0, index + dir))]);
     },
-    setMapTarget: (mapTarget) => set({ mapTarget }),
+    openMap(target) {
+      const rest = get().mapTargets.filter((t) => t.rowId !== target.rowId);
+      set({ mapTargets: [...rest, target] });
+    },
+    closeMap(rowId) {
+      set({ mapTargets: get().mapTargets.filter((t) => t.rowId !== rowId) });
+    },
 
     applyBgToActive(bg) {
       const a = get().active;

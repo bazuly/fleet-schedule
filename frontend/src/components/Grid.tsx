@@ -977,7 +977,7 @@ export default function Grid({ panel, frozen }: Props) {
     : [];
   const showOnMap = () => {
     if (!mapRow || !mapUnits.length) return;
-    useStore.getState().setMapTarget({
+    useStore.getState().openMap({
       rowId: mapRow.id,
       title: mapRow.driver.split("\n")[0].trim() || mapUnits[0].text,
       units: mapUnits,

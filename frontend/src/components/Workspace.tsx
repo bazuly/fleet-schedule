@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, tokenStore } from "@/lib/api";
 import { connectRealtime } from "@/lib/realtime";
 import { useStore } from "@/lib/store";
@@ -36,20 +36,31 @@ interface WindowsState {
 }
 
 const WINDOWS_KEY = "fleet.windows";
-const MAP_WINDOW_KEY = "fleet.mapWindow";
+const MAPS_KEY = "fleet.mapWindows";
+const OPEN_MAPS_KEY = "fleet.openMaps";
 
-function loadMapGeometry(): WindowGeometry {
+function defaultMapGeometry(index: number): WindowGeometry {
   const w = typeof window === "undefined" ? 1400 : window.innerWidth;
   const h = typeof window === "undefined" ? 900 : window.innerHeight;
-  const width = Math.min(720, w - 80);
-  const height = Math.min(520, h - 140);
-  const defaults = { x: Math.max(20, w - width - 40), y: 110, w: width, h: height, collapsed: false };
-  if (typeof window === "undefined") return defaults;
+  const width = Math.min(480, w - 80);
+  const height = Math.min(380, h - 160);
+  const shift = (index % 8) * 32;
+  return {
+    x: Math.max(16, w - width - 28 - shift),
+    y: 72 + shift,
+    w: width,
+    h: height,
+    collapsed: false,
+  };
+}
+
+function loadMapGeometries(): Record<string, WindowGeometry> {
+  if (typeof window === "undefined") return {};
   try {
-    const saved = localStorage.getItem(MAP_WINDOW_KEY);
-    return saved ? { ...defaults, ...JSON.parse(saved) } : defaults;
+    const saved = localStorage.getItem(MAPS_KEY);
+    return saved ? (JSON.parse(saved) as Record<string, WindowGeometry>) : {};
   } catch {
-    return defaults;
+    return {};
   }
 }
 
@@ -82,9 +93,26 @@ export default function Workspace() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
   const [windows, setWindows] = useState<WindowsState>(loadWindows);
-  const [mapGeometry, setMapGeometry] = useState<WindowGeometry>(loadMapGeometry);
+  const [mapGeometry, setMapGeometry] = useState<Record<string, WindowGeometry>>(loadMapGeometries);
   const [mapOnTop, setMapOnTop] = useState(true);
-  const mapTarget = useStore((s) => s.mapTarget);
+  const [topMapId, setTopMapId] = useState<string | null>(null);
+  const mapTargets = useStore((s) => s.mapTargets);
+  const mapsRestored = useCallback((ids: string[]) => {
+    const rows = useStore.getState().rows;
+    for (const id of ids) {
+      const row = rows[id];
+      if (!row) continue;
+      const units = (["tractor", "trailer"] as const)
+        .map((kind) => ({ kind, text: row[kind].trim() }))
+        .filter((u) => u.text);
+      if (!units.length) continue;
+      useStore.getState().openMap({
+        rowId: row.id,
+        title: row.driver.split("\n")[0].trim() || units[0].text,
+        units,
+      });
+    }
+  }, []);
   const toast = useStore((s) => s.toast);
   const loading = useStore((s) => s.loading);
 
@@ -100,6 +128,12 @@ export default function Workspace() {
         useStore.getState().setUser(user);
         await useStore.getState().loadCalendar();
         await useStore.getState().loadAll();
+        try {
+          const ids = JSON.parse(localStorage.getItem(OPEN_MAPS_KEY) || "[]") as string[];
+          if (Array.isArray(ids)) mapsRestored(ids);
+        } catch {
+          // Список открытых карт необязателен.
+        }
         setReady(true);
         disconnect = connectRealtime();
       } catch {
@@ -107,7 +141,7 @@ export default function Workspace() {
       }
     })();
     return () => disconnect?.();
-  }, [router]);
+  }, [router, mapsRestored]);
 
   const updateWindows = useCallback((fn: (w: WindowsState) => WindowsState) => {
     setWindows((prev) => {
@@ -125,10 +159,38 @@ export default function Workspace() {
     [updateWindows],
   );
 
-  const changeMapGeometry = useCallback((g: WindowGeometry) => {
-    localStorage.setItem(MAP_WINDOW_KEY, JSON.stringify(g));
-    setMapGeometry(g);
+  const changeMapGeometry = useCallback((rowId: string, g: WindowGeometry) => {
+    setMapGeometry((prev) => {
+      const next = { ...prev, [rowId]: g };
+      localStorage.setItem(MAPS_KEY, JSON.stringify(next));
+      return next;
+    });
   }, []);
+
+  const mapCount = useRef(0);
+  useEffect(() => {
+    if (!ready) return;
+    localStorage.setItem(OPEN_MAPS_KEY, JSON.stringify(mapTargets.map((t) => t.rowId)));
+    setMapGeometry((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      mapTargets.forEach((t, i) => {
+        if (!next[t.rowId]) {
+          next[t.rowId] = defaultMapGeometry(i);
+          changed = true;
+        }
+      });
+      if (!changed) return prev;
+      localStorage.setItem(MAPS_KEY, JSON.stringify(next));
+      return next;
+    });
+    const lastId = mapTargets[mapTargets.length - 1]?.rowId ?? null;
+    if (mapTargets.length >= mapCount.current && lastId && lastId !== topMapId) {
+      setTopMapId(lastId);
+      setMapOnTop(true);
+    }
+    mapCount.current = mapTargets.length;
+  }, [ready, mapTargets]);
 
   const toggle = (p: PanelKey) => {
     updateWindows((w) => ({ ...w, visible: { ...w.visible, [p]: !w.visible[p] } }));
@@ -165,19 +227,23 @@ export default function Workspace() {
           ),
       )}
 
-      {mapTarget && (
+      {mapTargets.map((target, index) => (
         <FloatingWindow
-          title={`НА КАРТЕ — ${mapTarget.title}`}
+          key={target.rowId}
+          title={`НА КАРТЕ — ${target.title}`}
           accent="#7e57c2"
-          geometry={mapGeometry}
-          zIndex={mapOnTop ? 150 : 99}
-          onFocus={() => setMapOnTop(true)}
-          onChange={changeMapGeometry}
-          onClose={() => useStore.getState().setMapTarget(null)}
+          geometry={mapGeometry[target.rowId] ?? defaultMapGeometry(index)}
+          zIndex={mapOnTop ? (target.rowId === topMapId ? 170 : 130 + index) : 90 + index}
+          onFocus={() => {
+            setMapOnTop(true);
+            setTopMapId(target.rowId);
+          }}
+          onChange={(g) => changeMapGeometry(target.rowId, g)}
+          onClose={() => useStore.getState().closeMap(target.rowId)}
         >
-          <MapView target={mapTarget} />
+          <MapView target={target} />
         </FloatingWindow>
-      )}
+      ))}
 
       {toast && <div className={styles.toast}>{toast}</div>}
     </div>

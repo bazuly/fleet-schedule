@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, tokenStore } from "@/lib/api";
-import { todayIso } from "@/lib/dates";
+import { addDays, todayIso } from "@/lib/dates";
+import { pendingTasks, type PendingTask } from "@/lib/pending";
 import { colDay, isDayCol, scrollBus, useStore, ZOOMS } from "@/lib/store";
 import styles from "./Toolbar.module.css";
 
@@ -44,6 +45,13 @@ export default function Toolbar({ visible, onToggle }: Props) {
   const paletteRef = useRef<HTMLDivElement>(null);
   const [fontMenu, setFontMenu] = useState<{ x: number; y: number } | null>(null);
   const fontRef = useRef<HTMLDivElement>(null);
+  const [bellOpen, setBellOpen] = useState(false);
+  const [bellBox, setBellBox] = useState<{ left: number; top: number } | null>(null);
+  const bellRef = useRef<HTMLDivElement>(null);
+  const rows = useStore((s) => s.rows);
+  const cells = useStore((s) => s.cells);
+  const today = todayIso();
+  const pending = useMemo(() => pendingTasks(rows, cells, today), [rows, cells, today]);
   const active = useStore((s) => s.active);
   const canMerge = (active?.colKeys.filter(isDayCol).length ?? 0) > 1;
   const paletteOpen = palette !== null;
@@ -75,18 +83,19 @@ export default function Toolbar({ visible, onToggle }: Props) {
   }, []);
 
   useEffect(() => {
-    if (!paletteOpen && !zoomMenu && !fontMenu) return;
+    if (!paletteOpen && !zoomMenu && !fontMenu && !bellOpen) return;
     const close = (e: MouseEvent) => {
       const node = e.target as Node;
       if (paletteOpen && !paletteRef.current?.contains(node)) setPalette(null);
       if (fontMenu && !fontRef.current?.contains(node)) setFontMenu(null);
+      if (bellOpen && !bellRef.current?.contains(node)) setBellOpen(false);
       if (zoomMenu && !zoomBtnRef.current?.contains(node) && !(e.target as HTMLElement).closest("[data-zoom-menu]")) {
         setZoomMenu(null);
       }
     };
     window.addEventListener("mousedown", close);
     return () => window.removeEventListener("mousedown", close);
-  }, [paletteOpen, zoomMenu, fontMenu]);
+  }, [paletteOpen, zoomMenu, fontMenu, bellOpen]);
 
   const logout = async () => {
     try {
@@ -98,6 +107,40 @@ export default function Toolbar({ visible, onToggle }: Props) {
 
   return (
     <div className={styles.toolbar}>
+      {pending.length > 0 && (
+        <div className={styles.group}>
+          <div className={styles.bellWrap} ref={bellRef}>
+            <button
+              onMouseDown={keepFocus}
+              className={styles.bell}
+              title="Не запланировано на сегодня и завтра"
+              onClick={() => {
+                const rect = bellRef.current?.getBoundingClientRect();
+                if (rect) {
+                  setBellBox({
+                    left: Math.max(8, Math.min(rect.left, window.innerWidth - 336)),
+                    top: rect.bottom + 6,
+                  });
+                }
+                setBellOpen((v) => !v);
+              }}
+            >
+              <span aria-hidden>🔔</span>
+              <span className={styles.badge}>{pending.length > 99 ? "99+" : pending.length}</span>
+            </button>
+            {bellOpen && bellBox && (
+              <PendingMenu
+                tasks={pending}
+                today={today}
+                box={bellBox}
+                visible={visible}
+                onToggle={onToggle}
+                onClose={() => setBellOpen(false)}
+              />
+            )}
+          </div>
+        </div>
+      )}
       <div className={styles.group}>
         <button onMouseDown={keepFocus} disabled={!canUndo} onClick={() => useStore.getState().undo()} title="Отменить (⌘Z)">
           ↶
@@ -263,6 +306,64 @@ export default function Toolbar({ visible, onToggle }: Props) {
         )}
         <button onClick={logout}>Выйти</button>
       </div>
+    </div>
+  );
+}
+
+function dayLabel(days: string[], today: string): string {
+  const names = days.map((day) => (day === today ? "сегодня" : day === addDays(today, 1) ? "завтра" : day));
+  return names.join(" и ");
+}
+
+const PANEL_LABEL: Record<PendingTask["panel"], string> = {
+  unassigned: "Нераспределённое",
+  pickups: "Заборы продукции",
+};
+
+function PendingMenu({
+  tasks,
+  today,
+  box,
+  visible,
+  onToggle,
+  onClose,
+}: {
+  tasks: PendingTask[];
+  today: string;
+  box: { left: number; top: number };
+  visible: Record<PanelKey, boolean>;
+  onToggle(panel: PanelKey): void;
+  onClose(): void;
+}) {
+  const open = (task: PendingTask) => {
+    const day = task.days[0];
+    if (!visible[task.panel]) {
+      onToggle(task.panel);
+      setTimeout(() => scrollBus.scrollToDay(day), 80);
+    } else {
+      scrollBus.scrollToDay(day);
+    }
+    onClose();
+  };
+
+  return (
+    <div className={styles.pendingMenu} style={{ left: box.left, top: box.top }}>
+      <div className={styles.pendingHead}>Не запланировано</div>
+      {(["unassigned", "pickups"] as const).map((panel) => {
+        const list = tasks.filter((t) => t.panel === panel);
+        if (!list.length) return null;
+        return (
+          <div key={panel}>
+            <div className={styles.pendingSection}>{PANEL_LABEL[panel]}</div>
+            {list.map((task) => (
+              <button key={`${task.rowId}|${task.anchor}`} className={styles.pendingItem} onClick={() => open(task)}>
+                <span className={styles.pendingWhen}>{dayLabel(task.days, today)}</span>
+                <span className={styles.pendingText}>{task.value}</span>
+              </button>
+            ))}
+          </div>
+        );
+      })}
     </div>
   );
 }

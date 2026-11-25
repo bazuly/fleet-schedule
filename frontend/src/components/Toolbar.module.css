@@ -110,6 +110,90 @@
   justify-content: flex-end;
 }
 
+.bellWrap {
+  position: relative;
+}
+
+.bell {
+  position: relative;
+  width: 34px;
+  padding: 0;
+  justify-content: center;
+}
+
+.badge {
+  position: absolute;
+  top: -3px;
+  right: -2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #d93025;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+.pendingMenu {
+  position: fixed;
+  z-index: 2000;
+  top: 48px;
+  width: 320px;
+  max-height: 380px;
+  overflow: auto;
+  padding: 6px 0 8px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(60, 64, 67, 0.3);
+}
+
+.pendingHead {
+  padding: 4px 12px 6px;
+  font-weight: 700;
+  color: #202124;
+}
+
+.pendingSection {
+  padding: 8px 12px 2px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #5f6368;
+}
+
+.pendingMenu button {
+  height: auto;
+  width: 100%;
+  white-space: normal;
+  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 2px;
+  padding: 6px 12px;
+  text-align: left;
+}
+
+.pendingWhen {
+  color: #1a73e8;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.pendingText {
+  color: #202124;
+  white-space: pre-wrap;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
 .palette .noFill {
   grid-column: 1 / -1;
   justify-content: center;
