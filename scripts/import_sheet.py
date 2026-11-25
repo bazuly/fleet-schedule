@@ -1,7 +1,7 @@
 """Импорт листа «МСК 20 тонн» из выгрузки Google Sheets (xlsx), начиная с октября 2025.
 
-Заливка объединённых ячеек в файле хранится только у первой ячейки — копируем её
-на остальные дни блока, чтобы цвет в графике совпадал с таблицей.
+Объединение записывается шириной span у первой ячейки. Дни внутри блока отдельно
+не хранятся: в графике это одна клетка без внутренних линий.
 Заметки ячеек становятся комментариями.
 
 Запуск (из корня репозитория, база уже с миграциями):
@@ -86,23 +86,19 @@ def main() -> None:
         if merge.min_row < 3 or merge.min_row > 96 or merge.min_col not in dates:
             continue
         anchor = payloads.get((merge.min_row, merge.min_col))
-        if not anchor or not anchor["bg"]:
+        if not anchor:
             continue
+        width = 1
         for col in range(merge.min_col + 1, merge.max_col + 1):
             if col not in dates:
-                continue
+                break
             key = (merge.min_row, col)
             cell = payloads.get(key)
-            if cell is None:
-                payloads[key] = {
-                    "day": dates[col],
-                    "value": "",
-                    "bg": anchor["bg"],
-                    "fg": None,
-                    "comment": "",
-                }
-            elif not cell["bg"]:
-                cell["bg"] = anchor["bg"]
+            if cell and (cell["value"] or cell["comment"]):
+                break
+            payloads.pop(key, None)
+            width += 1
+        anchor["span"] = width
 
     planned = []
     for row in range(3, 97):
@@ -160,6 +156,7 @@ def main() -> None:
                 "bg": cell["bg"],
                 "fg": cell["fg"],
                 "comment": cell["comment"],
+                "span": cell.get("span", 1),
             }
         )
     for i in range(0, len(cells_out), 4000):

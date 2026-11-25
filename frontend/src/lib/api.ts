@@ -28,6 +28,8 @@ export interface Cell {
   bg: string | null;
   fg: string | null;
   comment: string;
+  /** Сколько дней занимает ячейка, начиная с этой даты. */
+  span: number;
 }
 
 export type RowPatch = { id: string } & Partial<Pick<Row, RowField | "position">>;

@@ -27,6 +27,13 @@ pub struct Cell {
     pub fg: Option<String>,
     #[serde(default)]
     pub comment: String,
+    /// Сколько дней занимает ячейка. Продолжения отдельными строками не хранятся.
+    #[serde(default = "default_span")]
+    pub span: i32,
+}
+
+fn default_span() -> i32 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]

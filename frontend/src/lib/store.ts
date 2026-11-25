@@ -20,12 +20,18 @@ export interface CellData {
   bg: string | null;
   fg: string | null;
   comment: string;
+  /** Сколько дней занимает ячейка. 1 — обычная клетка. */
+  span: number;
 }
 
-export const EMPTY_CELL: CellData = { value: "", bg: null, fg: null, comment: "" };
+export const EMPTY_CELL: CellData = { value: "", bg: null, fg: null, comment: "", span: 1 };
 
 export function isBlank(c: CellData): boolean {
-  return !c.value && !c.bg && !c.fg && !c.comment;
+  return (c.span ?? 1) <= 1 && !c.value && !c.bg && !c.fg && !c.comment;
+}
+
+export function toCellData(c: Cell): CellData {
+  return { value: c.value, bg: c.bg, fg: c.fg, comment: c.comment ?? "", span: c.span || 1 };
 }
 
 export interface Edit {
@@ -35,6 +41,7 @@ export interface Edit {
   bg?: string | null;
   fg?: string | null;
   comment?: string;
+  span?: number;
 }
 
 interface Batch {
@@ -58,6 +65,7 @@ export interface ClipboardData {
   bgs: (string | null)[][];
   fgs: (string | null)[][];
   comments: string[][];
+  spans: number[][];
   cut?: { gridId: Panel; rowIds: string[]; colKeys: ColKey[] };
 }
 
@@ -132,7 +140,7 @@ export const useStore = create<State>((set, get) => {
       const next = new Map(get().cells);
       for (const c of cells) {
         const k = cellKey(c.row_id, c.day);
-        const data = { value: c.value, bg: c.bg, fg: c.fg, comment: c.comment ?? "" };
+        const data = toCellData(c);
         if (isBlank(data)) next.delete(k);
         else next.set(k, data);
       }
@@ -186,12 +194,7 @@ export const useStore = create<State>((set, get) => {
         for (const r of rows) rowMap[r.id] = r;
         const cellMap = new Map<string, CellData>();
         for (const c of cells) {
-          cellMap.set(cellKey(c.row_id, c.day), {
-            value: c.value,
-            bg: c.bg,
-            fg: c.fg,
-            comment: c.comment ?? "",
-          });
+          cellMap.set(cellKey(c.row_id, c.day), toCellData(c));
         }
         set({ rows: rowMap, cells: cellMap });
       } catch (e) {
@@ -216,7 +219,7 @@ export const useStore = create<State>((set, get) => {
       for (const c of cells) {
         if (c.day < from || c.day > to) continue;
         const k = cellKey(c.row_id, c.day);
-        const data = { value: c.value, bg: c.bg, fg: c.fg, comment: c.comment ?? "" };
+        const data = toCellData(c);
         if (isBlank(data)) next.delete(k);
         else next.set(k, data);
       }
@@ -258,9 +261,13 @@ export const useStore = create<State>((set, get) => {
           const bg = e.bg !== undefined ? e.bg : prev.bg;
           const fg = e.fg !== undefined ? e.fg : prev.fg;
           const comment = e.comment !== undefined ? e.comment : prev.comment;
-          if (value === prev.value && bg === prev.bg && fg === prev.fg && comment === prev.comment) continue;
-          cellsBefore.push({ row_id: e.rowId, day, ...prev });
-          cellsAfter.push({ row_id: e.rowId, day, value, bg, fg, comment });
+          let span = e.span !== undefined ? Math.max(1, Math.min(62, e.span)) : prev.span || 1;
+          // Пустая клетка не может оставаться объединением, если ширину не задали явно.
+          if (!value && !bg && !fg && !comment && !(e.span !== undefined && e.span > 1)) span = 1;
+          if (value === prev.value && bg === prev.bg && fg === prev.fg && comment === prev.comment && span === (prev.span || 1))
+            continue;
+          cellsBefore.push({ row_id: e.rowId, day, ...prev, span: prev.span || 1 });
+          cellsAfter.push({ row_id: e.rowId, day, value, bg, fg, comment, span });
         } else if (e.value !== undefined) {
           const field = colField(e.col);
           const prev = rows[e.rowId][field];

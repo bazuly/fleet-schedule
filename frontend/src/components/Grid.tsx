@@ -32,7 +32,7 @@ interface Props {
 const BASE_CELL = 96;
 const BASE_HEADER = 40;
 const BASE_GUTTER = 38;
-const MAX_SPILL = 6;
+const MAX_SPAN = 62;
 const OVERSCAN = 3;
 
 type Pos = { r: number; c: number };
@@ -132,6 +132,44 @@ export default function Grid({ panel, frozen }: Props) {
     [rowIds, cells, days, K],
   );
 
+  // Ширина объединения: сохранённый span или старая цепочка «текст + та же заливка дальше».
+  const spanAt = useCallback(
+    (r: number, dayIndex: number): number => {
+      if (dayIndex < 0 || dayIndex >= D) return 1;
+      const data = cellAt(r, K + dayIndex);
+      if (!data) return 1;
+      const stored = data.span ?? 1;
+      if (stored > 1) return Math.min(stored, D - dayIndex);
+      if (!data.value || !data.bg) return 1;
+      let n = 1;
+      while (n < MAX_SPAN && dayIndex + n < D) {
+        const next = cellAt(r, K + dayIndex + n);
+        if (!next || next.value || next.comment || (next.span ?? 1) > 1 || next.bg !== data.bg) break;
+        n += 1;
+      }
+      return n;
+    },
+    [D, K, cellAt],
+  );
+
+  /** Клетка вместе с объединением, которому она принадлежит. Закреплённые колонки не объединяются. */
+  const blockAt = useCallback(
+    (r: number, c: number): { c0: number; c1: number } => {
+      if (c < K || r < 0 || r >= N) return { c0: c, c1: c };
+      const dayIndex = c - K;
+      const look = Math.min(dayIndex, MAX_SPAN - 1);
+      for (let back = look; back >= 0; back--) {
+        const n = spanAt(r, dayIndex - back);
+        if (n > back) {
+          const start = dayIndex - back;
+          return { c0: K + start, c1: K + start + n - 1 };
+        }
+      }
+      return { c0: c, c1: c };
+    },
+    [K, N, spanAt],
+  );
+
   // Строки и диапазон дат могут измениться извне — держим выделение в пределах таблицы.
   const sel = useMemo<Sel>(() => {
     const clamp = (p: Pos): Pos => ({
@@ -141,15 +179,30 @@ export default function Grid({ panel, frozen }: Props) {
     return { anchor: clamp(rawSel.anchor), focus: clamp(rawSel.focus) };
   }, [rawSel, N, C]);
 
-  const bounds = useMemo(
-    () => ({
-      r0: Math.min(sel.anchor.r, sel.focus.r),
-      r1: Math.max(sel.anchor.r, sel.focus.r),
-      c0: Math.min(sel.anchor.c, sel.focus.c),
-      c1: Math.max(sel.anchor.c, sel.focus.c),
-    }),
-    [sel],
-  );
+  const bounds = useMemo(() => {
+    const r0 = Math.min(sel.anchor.r, sel.focus.r);
+    const r1 = Math.max(sel.anchor.r, sel.focus.r);
+    let c0 = Math.min(sel.anchor.c, sel.focus.c);
+    let c1 = Math.max(sel.anchor.c, sel.focus.c);
+    // Как в Excel: выделение, задевшее объединение, захватывает его целиком.
+    let changed = true;
+    for (let guard = 0; changed && guard < MAX_SPAN; guard++) {
+      changed = false;
+      for (let r = r0; r <= r1; r++) {
+        const left = blockAt(r, c0);
+        const right = blockAt(r, c1);
+        if (left.c0 < c0) {
+          c0 = left.c0;
+          changed = true;
+        }
+        if (right.c1 > c1) {
+          c1 = right.c1;
+          changed = true;
+        }
+      }
+    }
+    return { r0, r1, c0, c1 };
+  }, [sel, blockAt]);
 
   // Сообщаем выделение в общее хранилище — его используют строка формул и заливка.
   const setActive = useStore((s) => s.setActive);
@@ -157,7 +210,11 @@ export default function Grid({ panel, frozen }: Props) {
     if (!focused || N === 0) return;
     const ids = rowIds.slice(bounds.r0, bounds.r1 + 1);
     const cols: ColKey[] = [];
-    for (let c = bounds.c0; c <= bounds.c1; c++) cols.push(colKey(c));
+    for (let c = bounds.c0; c <= bounds.c1; c++) {
+      // День внутри объединения не красим отдельно: заливка живёт в левой ячейке.
+      if (c >= K && bounds.r0 === bounds.r1 && blockAt(bounds.r0, c).c0 !== c) continue;
+      cols.push(colKey(c));
+    }
     setActive({
       gridId: panel,
       rowIds: ids,
@@ -165,7 +222,7 @@ export default function Grid({ panel, frozen }: Props) {
       anchorRowId: rowIds[sel.anchor.r],
       anchorCol: colKey(sel.anchor.c),
     });
-  }, [focused, bounds, sel.anchor, rowIds, colKey, panel, setActive, N]);
+  }, [focused, bounds, sel.anchor, rowIds, colKey, panel, setActive, N, blockAt, K]);
 
   // ---------- Прокрутка и размеры ----------
 
@@ -282,10 +339,15 @@ export default function Grid({ panel, frozen }: Props) {
 
   const select = useCallback(
     (anchor: Pos, focus: Pos = anchor, scrollTo: Pos = focus) => {
-      setSel({ anchor, focus });
+      if (anchor.r === focus.r && anchor.c === focus.c) {
+        const block = blockAt(anchor.r, anchor.c);
+        setSel({ anchor: { r: anchor.r, c: block.c0 }, focus: { r: anchor.r, c: block.c1 } });
+      } else {
+        setSel({ anchor, focus });
+      }
       ensureVisible(scrollTo);
     },
-    [ensureVisible],
+    [ensureVisible, blockAt],
   );
 
   const clampPos = useCallback(
@@ -319,13 +381,22 @@ export default function Grid({ panel, frozen }: Props) {
   const move = useCallback(
     (dr: number, dc: number, extend = false, toEdge = false) => {
       if (N === 0) return;
-      const from = extend ? sel.focus : sel.anchor;
-      const target = clampPos(toEdge ? jump(from, dr, dc) : { r: from.r + dr, c: from.c + dc });
-      if (extend) select(sel.anchor, target);
-      else select(target);
-    },
-    [N, sel, clampPos, jump, select],
-  );
+    const from = extend ? sel.focus : sel.anchor;
+    if (!extend && !toEdge) {
+      const block = blockAt(from.r, from.c);
+      const raw = clampPos({
+        r: from.r + dr,
+        c: dc > 0 ? block.c1 + 1 : dc < 0 ? block.c0 - 1 : from.c,
+      });
+      select(raw);
+      return;
+    }
+    const target = clampPos(toEdge ? jump(from, dr, dc) : { r: from.r + dr, c: from.c + dc });
+    if (extend) select(sel.anchor, target);
+    else select(target);
+  },
+  [N, sel, clampPos, jump, select, blockAt],
+);
 
   // ---------- Редактирование ----------
 
@@ -357,12 +428,9 @@ export default function Grid({ panel, frozen }: Props) {
       const rowId = rowIds[e.r];
       if (rowId) applyEdits([{ rowId, col: colKey(e.c), value: e.value }]);
       focusSink();
-      if (dr || dc) {
-        const target = clampPos({ r: e.r + dr, c: e.c + dc });
-        select(target);
-      }
+      if (dr || dc) move(dr, dc);
     },
-    [rowIds, colKey, applyEdits, focusSink, clampPos, select, setEditing],
+    [rowIds, colKey, applyEdits, focusSink, setEditing, move],
   );
 
   const cancelEdit = useCallback(() => {
@@ -377,30 +445,35 @@ export default function Grid({ panel, frozen }: Props) {
     const bgs: (string | null)[][] = [];
     const fgs: (string | null)[][] = [];
     const comments: string[][] = [];
+    const spans: number[][] = [];
     for (let r = bounds.r0; r <= bounds.r1; r++) {
       const vr: string[] = [];
       const br: (string | null)[] = [];
       const fr: (string | null)[] = [];
       const cr: string[] = [];
+      const sr: number[] = [];
       for (let c = bounds.c0; c <= bounds.c1; c++) {
         const cell = cellAt(r, c);
-        vr.push(valueAt(r, c));
-        br.push(cell?.bg ?? null);
-        fr.push(cell?.fg ?? null);
-        cr.push(cell?.comment ?? "");
+        const block = blockAt(r, c);
+        vr.push(block.c0 === c ? valueAt(r, c) : "");
+        br.push(block.c0 === c ? (cell?.bg ?? null) : null);
+        fr.push(block.c0 === c ? (cell?.fg ?? null) : null);
+        cr.push(block.c0 === c ? (cell?.comment ?? "") : "");
+        sr.push(block.c0 === c ? block.c1 - block.c0 + 1 : 1);
       }
       values.push(vr);
       bgs.push(br);
       fgs.push(fr);
       comments.push(cr);
+      spans.push(sr);
     }
-    return { values, bgs, fgs, comments };
-  }, [bounds, valueAt, cellAt]);
+    return { values, bgs, fgs, comments, spans };
+  }, [bounds, valueAt, cellAt, blockAt]);
 
   const doCopy = useCallback(
     (cut: boolean, dt?: DataTransfer | null) => {
       if (N === 0) return;
-      const { values, bgs, fgs, comments } = selectionMatrix();
+      const { values, bgs, fgs, comments, spans } = selectionMatrix();
       const tsv = toTsv(values);
       if (dt) {
         dt.setData("text/plain", tsv);
@@ -416,6 +489,7 @@ export default function Grid({ panel, frozen }: Props) {
         bgs,
         fgs,
         comments,
+        spans,
         cut: cut
           ? { gridId: panel, rowIds: rowIds.slice(bounds.r0, bounds.r1 + 1), colKeys: cols }
           : undefined,
@@ -434,6 +508,7 @@ export default function Grid({ panel, frozen }: Props) {
       const bgs = internal ? internal.bgs : null;
       const fgs = internal ? internal.fgs : null;
       const comments = internal ? internal.comments : null;
+      const spans = internal ? internal.spans : null;
       if (!values.length || !values[0].length) return;
 
       const h = values.length;
@@ -456,6 +531,8 @@ export default function Grid({ panel, frozen }: Props) {
             edit.fg = fgs?.[sr]?.[sc] ?? null;
             // Комментарий не размножаем, когда одно значение заливает весь диапазон.
             if (comments && (!single || (r === r0 && c === c0))) edit.comment = comments[sr]?.[sc] ?? "";
+            const span = spans?.[sr]?.[sc] ?? 1;
+            if (span > 1) edit.span = span;
           }
           target.set(`${edit.rowId}|${edit.col}`, edit);
         }
@@ -522,27 +599,32 @@ export default function Grid({ panel, frozen }: Props) {
       const rect = fillRect(t);
       if (!rect) return;
       const { r0, r1, c0, c1 } = bounds;
+      const block = blockAt(r0, c0);
+      const soleMerge = r0 === r1 && c0 === block.c0 && c1 === block.c1;
+      const srcC0 = soleMerge ? block.c0 : c0;
+      const srcC1 = soleMerge ? block.c0 : c1;
       const h = r1 - r0 + 1;
-      const w = c1 - c0 + 1;
+      const w = srcC1 - srcC0 + 1;
       const mod = (a: number, n: number) => ((a % n) + n) % n;
       const edits: Edit[] = [];
       for (let r = rect.r0; r <= rect.r1; r++)
         for (let c = rect.c0; c <= rect.c1; c++) {
           if (r >= r0 && r <= r1 && c >= c0 && c <= c1) continue;
           const sr = r0 + mod(r - r0, h);
-          const sc = c0 + mod(c - c0, w);
+          const sc = srcC0 + mod(c - srcC0, w);
           const edit: Edit = { rowId: rowIds[r], col: colKey(c), value: valueAt(sr, sc) };
           if (c >= K && sc >= K) {
             const src = cellAt(sr, sc);
             edit.bg = src?.bg ?? null;
             edit.fg = src?.fg ?? null;
+            edit.span = 1;
           }
           edits.push(edit);
         }
       applyEdits(edits);
       setSel({ anchor: { r: rect.r0, c: rect.c0 }, focus: { r: rect.r1, c: rect.c1 } });
     },
-    [fillRect, bounds, rowIds, colKey, valueAt, cellAt, applyEdits, K],
+    [fillRect, bounds, rowIds, colKey, valueAt, cellAt, applyEdits, K, blockAt],
   );
 
   // ---------- Мышь ----------
@@ -607,11 +689,11 @@ export default function Grid({ panel, frozen }: Props) {
     const p = clampPos(hit);
     if (e.button === 2) {
       const inside = p.r >= bounds.r0 && p.r <= bounds.r1 && p.c >= bounds.c0 && p.c <= bounds.c1;
-      if (!inside) setSel({ anchor: p, focus: p });
+      if (!inside) select(p);
       return;
     }
     if (e.shiftKey) setSel((s) => ({ anchor: s.anchor, focus: p }));
-    else setSel({ anchor: p, focus: p });
+    else select(p);
     setDrag({ kind: "select" });
   };
 
@@ -796,10 +878,92 @@ export default function Grid({ panel, frozen }: Props) {
   // ---------- Контекстное меню ----------
 
   const selectedRowIds = rowIds.slice(bounds.r0, bounds.r1 + 1);
-  const commentTarget = menu && menu.c >= K && menu.r >= 0 && menu.r < N ? { r: menu.r, c: menu.c } : null;
+  const commentTarget =
+    menu && menu.c >= K && menu.r >= 0 && menu.r < N
+      ? { r: menu.r, c: blockAt(menu.r, menu.c).c0 }
+      : null;
   const commentText = commentTarget
     ? (cells.get(cellKey(rowIds[commentTarget.r], days[commentTarget.c - K]))?.comment ?? "")
     : "";
+
+  const daySelection = bounds.c1 >= K && Math.max(bounds.c0, K) < bounds.c1;
+  let selectionHasMerge = false;
+  if (bounds.c1 >= K) {
+    for (let r = bounds.r0; r <= bounds.r1 && !selectionHasMerge; r++) {
+      for (let c = Math.max(bounds.c0, K); c <= bounds.c1; c++) {
+        const block = blockAt(r, c);
+        if (block.c1 > block.c0) {
+          selectionHasMerge = true;
+          break;
+        }
+      }
+    }
+  }
+
+  const mergeSelection = () => {
+    const edits: Edit[] = [];
+    let losesText = false;
+    for (let r = bounds.r0; r <= bounds.r1; r++) {
+      let c0 = Math.max(bounds.c0, K);
+      let c1 = bounds.c1;
+      if (c1 <= c0) continue;
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (let c = c0; c <= c1; c++) {
+          const block = blockAt(r, c);
+          if (block.c0 < c0) {
+            c0 = block.c0;
+            grew = true;
+          }
+          if (block.c1 > c1) {
+            c1 = block.c1;
+            grew = true;
+          }
+        }
+      }
+      const anchor = cellAt(r, c0);
+      for (let c = c0 + 1; c <= c1; c++) {
+        const cell = cellAt(r, c);
+        if (cell?.value) losesText = true;
+        if (cell) edits.push({ rowId: rowIds[r], col: colKey(c), value: "", bg: null, fg: null, comment: "", span: 1 });
+      }
+      edits.push({
+        rowId: rowIds[r],
+        col: colKey(c0),
+        value: anchor?.value ?? "",
+        bg: anchor?.bg ?? null,
+        fg: anchor?.fg ?? null,
+        comment: anchor?.comment ?? "",
+        span: c1 - c0 + 1,
+      });
+    }
+    if (!edits.length) return;
+    if (losesText && !confirm("Объединить ячейки? Останется только текст левой ячейки в каждой строке.")) return;
+    applyEdits(edits);
+  };
+
+  const unmergeSelection = () => {
+    const edits: Edit[] = [];
+    const seen = new Set<string>();
+    for (let r = bounds.r0; r <= bounds.r1; r++) {
+      for (let c = Math.max(bounds.c0, K); c <= bounds.c1; c++) {
+        const block = blockAt(r, c);
+        if (block.c1 <= block.c0) continue;
+        const key = `${r}:${block.c0}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        edits.push({ rowId: rowIds[r], col: colKey(block.c0), span: 1 });
+        for (let k = block.c0 + 1; k <= block.c1; k++) {
+          const cell = cellAt(r, k);
+          if (cell && !cell.value && !cell.comment) {
+            edits.push({ rowId: rowIds[r], col: colKey(k), value: "", bg: null, fg: null, comment: "", span: 1 });
+          }
+        }
+      }
+    }
+    applyEdits(edits);
+  };
   const menuItems: MenuItem[] = [
     { label: "Вырезать", hint: "⌘X", onClick: () => doCopy(true) },
     { label: "Копировать", hint: "⌘C", onClick: () => doCopy(false) },
@@ -832,6 +996,9 @@ export default function Grid({ panel, frozen }: Props) {
           } satisfies MenuItem,
         ]
       : []),
+    { separator: true },
+    { label: "Объединить ячейки", disabled: !daySelection, onClick: mergeSelection },
+    { label: "Разъединить ячейки", disabled: !selectionHasMerge, onClick: unmergeSelection },
     { separator: true },
     { label: "Очистить содержимое", hint: "Del", onClick: () => clearSelection("value") },
     { label: "Убрать заливку", onClick: () => clearSelection("bg") },
@@ -876,19 +1043,13 @@ export default function Grid({ panel, frozen }: Props) {
   const bodyCells: React.ReactNode[] = [];
   for (let r = r0v; r <= r1v; r++) {
     const id = rowIds[r];
-    for (let d = Math.max(0, d0v - MAX_SPILL); d <= d1v; d++) {
+    for (let d = Math.max(0, d0v - (MAX_SPAN - 1)); d <= d1v; d++) {
       const data = cells.get(cellKey(id, days[d]));
       if (!data) continue;
-      // Текст многодневного рейса тянется по ячейкам с той же заливкой и без своего текста.
-      let spill = 1;
-      if (data.value && data.bg) {
-        while (spill < MAX_SPILL && d + spill < D) {
-          const next = cells.get(cellKey(id, days[d + spill]));
-          if (!next || next.value || next.bg !== data.bg) break;
-          spill++;
-        }
-      }
-      if (d + spill - 1 < d0v) continue;
+      const block = blockAt(r, K + d);
+      if (block.c0 !== K + d) continue;
+      const span = block.c1 - block.c0 + 1;
+      if (d + span - 1 < d0v) continue;
       bodyCells.push(
         <div
           key={`${id}|${d}`}
@@ -896,10 +1057,10 @@ export default function Grid({ panel, frozen }: Props) {
           style={{
             left: d * colW + 1,
             top: r * rowH + 1,
-            width: colW - 1,
+            width: span * colW - 1,
             height: rowH - 1,
-            background: data.bg || undefined,
-            zIndex: data.value ? 2 : 1,
+            background: data.bg || (span > 1 ? "#fff" : undefined),
+            zIndex: span > 1 || data.value ? 2 : 1,
           }}
           onMouseEnter={
             data.comment
@@ -912,7 +1073,7 @@ export default function Grid({ panel, frozen }: Props) {
           {data.value && (
             <span
               className={styles.cellText}
-              style={{ width: spill * colW - 4, height: rowH - 4, color: data.fg || undefined }}
+              style={{ width: span * colW - 5, height: rowH - 5, color: data.fg || undefined }}
             >
               <span>{data.value}</span>
             </span>
@@ -995,9 +1156,15 @@ export default function Grid({ panel, frozen }: Props) {
   };
 
   const hasRows = N > 0;
+  const anchorBlock = hasRows ? blockAt(sel.anchor.r, sel.anchor.c) : null;
   const selR = hasRows ? selRects(bounds.r0, bounds.r1, bounds.c0, bounds.c1) : null;
-  const activeR = hasRows ? selRects(sel.anchor.r, sel.anchor.r, sel.anchor.c, sel.anchor.c) : null;
+  const activeR = anchorBlock ? selRects(sel.anchor.r, sel.anchor.r, anchorBlock.c0, anchorBlock.c1) : null;
   const multi = bounds.r0 !== bounds.r1 || bounds.c0 !== bounds.c1;
+  const soleBlock =
+    !!anchorBlock &&
+    bounds.r0 === bounds.r1 &&
+    bounds.c0 === anchorBlock.c0 &&
+    bounds.c1 === anchorBlock.c1;
 
   const fill = drag?.kind === "fill" ? fillRect(drag.target) : null;
   const fillR = fill ? selRects(fill.r0, fill.r1, fill.c0, fill.c1) : null;
@@ -1022,8 +1189,12 @@ export default function Grid({ panel, frozen }: Props) {
   let editorNode: React.ReactNode = null;
   if (editing) {
     const inFrozen = editing.c < K;
-    const left = inFrozen ? gutterW + frozenX[editing.c] : (editing.c - K) * colW;
-    const width = inFrozen ? Math.max(scaled(frozen[editing.c].width), scaled(220)) : Math.max(colW * 2, scaled(240));
+    const block = blockAt(editing.r, editing.c);
+    const span = Math.max(1, block.c1 - block.c0 + 1);
+    const left = inFrozen ? gutterW + frozenX[editing.c] : (block.c0 - K) * colW;
+    const width = inFrozen
+      ? Math.max(scaled(frozen[editing.c].width), scaled(220))
+      : Math.max(span * colW, scaled(220));
     const lines = editing.value.split("\n").length;
     editorNode = (
       <textarea
@@ -1105,7 +1276,7 @@ export default function Grid({ panel, frozen }: Props) {
           >
             + Добавить строку
           </button>
-          {selR && overlay(selR.frozenRect, `${styles.selRange} ${multi ? "" : styles.selSingle}`, "sf")}
+          {selR && overlay(selR.frozenRect, `${styles.selRange} ${multi && !soleBlock ? "" : styles.selSingle}`, "sf")}
           {activeR && overlay(activeR.frozenRect, styles.selActive, "af")}
           {cutR && overlay(cutR.frozenRect, styles.cutRect, "cf")}
           {fillR && overlay(fillR.frozenRect, styles.fillPreview, "ff")}
@@ -1125,7 +1296,7 @@ export default function Grid({ panel, frozen }: Props) {
         >
           {columnDecor}
           {bodyCells}
-          {selR && overlay(selR.bodyRect, `${styles.selRange} ${multi ? "" : styles.selSingle}`, "sb")}
+          {selR && overlay(selR.bodyRect, `${styles.selRange} ${multi && !soleBlock ? "" : styles.selSingle}`, "sb")}
           {activeR && overlay(activeR.bodyRect, styles.selActive, "ab")}
           {cutR && overlay(cutR.bodyRect, styles.cutRect, "cb")}
           {fillR && overlay(fillR.bodyRect, styles.fillPreview, "fb")}
