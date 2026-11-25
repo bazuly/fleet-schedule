@@ -25,7 +25,10 @@ export default function CommentBox({ x, y, initial, onSave, onClose }: Props) {
     <div
       data-no-grid
       className={styles.box}
-      style={{ left: Math.min(x, window.innerWidth - 320), top: Math.min(y, window.innerHeight - 220) }}
+      style={{
+        left: Math.max(8, Math.min(x, window.innerWidth - Math.min(300, window.innerWidth - 16) - 8)),
+        top: Math.max(8, Math.min(y, window.innerHeight - 180)),
+      }}
       onMouseDown={(e) => e.stopPropagation()}
     >
       <div className={styles.title}>Комментарий</div>

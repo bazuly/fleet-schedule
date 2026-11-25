@@ -30,6 +30,13 @@ interface Props {
 /** Кнопки тулбара не забирают фокус у таблицы, чтобы не терять выделение. */
 const keepFocus = (e: React.MouseEvent) => e.preventDefault();
 
+function placeMenu(rect: DOMRect, menuW: number) {
+  return {
+    x: Math.max(8, Math.min(rect.left, window.innerWidth - menuW - 8)),
+    y: rect.bottom + 6,
+  };
+}
+
 export default function Toolbar({ visible, onToggle }: Props) {
   const router = useRouter();
   const user = useStore((s) => s.user);
@@ -60,7 +67,7 @@ export default function Toolbar({ visible, onToggle }: Props) {
   const setPaletteOpen = (open: boolean) => {
     if (!open) return setPalette(null);
     const rect = paletteRef.current?.getBoundingClientRect();
-    setPalette(rect ? { x: rect.left + 10, y: rect.bottom + 6 } : { x: 0, y: 0 });
+    setPalette(rect ? placeMenu(rect, 188) : { x: 8, y: 0 });
   };
 
   useEffect(() => {
@@ -119,8 +126,9 @@ export default function Toolbar({ visible, onToggle }: Props) {
               onClick={() => {
                 const rect = bellRef.current?.getBoundingClientRect();
                 if (rect) {
+                  const menuW = Math.min(320, window.innerWidth - 16);
                   setBellBox({
-                    left: Math.max(8, Math.min(rect.left, window.innerWidth - 336)),
+                    left: Math.max(8, Math.min(rect.left, window.innerWidth - menuW - 8)),
                     top: rect.bottom + 6,
                   });
                 }
@@ -190,7 +198,7 @@ export default function Toolbar({ visible, onToggle }: Props) {
           onClick={() => {
             if (fontMenu) return setFontMenu(null);
             const rect = fontRef.current?.getBoundingClientRect();
-            setFontMenu(rect ? { x: rect.left, y: rect.bottom + 6 } : { x: 0, y: 0 });
+            setFontMenu(rect ? placeMenu(rect, 188) : { x: 8, y: 0 });
           }}
         >
           <span className={styles.fontIcon}>А</span> Шрифт ▾
@@ -245,7 +253,7 @@ export default function Toolbar({ visible, onToggle }: Props) {
           onClick={() => {
             if (zoomMenu) return setZoomMenu(null);
             const rect = zoomBtnRef.current?.getBoundingClientRect();
-            setZoomMenu(rect ? { x: rect.left, y: rect.bottom + 6 } : { x: 0, y: 0 });
+            setZoomMenu(rect ? placeMenu(rect, 96) : { x: 8, y: 0 });
           }}
         >
           {Math.round(zoom * 100)}%

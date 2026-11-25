@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Panel, RowField } from "@/lib/api";
 import { parseTsv, toHtmlTable, toTsv } from "@/lib/clipboard";
-import { daysBetween, formatChangedAt, formatDayHeader, isFirstOfMonth, todayIso } from "@/lib/dates";
+import { daysBetween, formatDayHeader, isFirstOfMonth, todayIso } from "@/lib/dates";
 import { ROW_STATUSES, statusFill } from "@/lib/status";
 import {
   cellKey,
@@ -12,7 +12,6 @@ import {
   scrollBus,
   sortedRowIds,
   useStore,
-  type CellData,
   type ColKey,
   type Edit,
 } from "@/lib/store";
@@ -35,6 +34,7 @@ interface Props {
 const BASE_CELL = 96;
 const BASE_HEADER = 40;
 const BASE_GUTTER = 38;
+const MIN_FROZEN: Record<string, number> = { driver: 118, tractor: 64, trailer: 64, note: 100 };
 const MAX_SPAN = 62;
 const OVERSCAN = 3;
 
@@ -42,14 +42,6 @@ type Pos = { r: number; c: number };
 type Sel = { anchor: Pos; focus: Pos };
 type Editing = { r: number; c: number; value: string; mode: "quick" | "full" };
 type Drag = { kind: "select" } | { kind: "fill"; target: Pos };
-
-function cellTip(data: CellData): string {
-  const who =
-    data.updated_by_name && data.updated_at
-      ? `Изменил ${data.updated_by_name}, ${formatChangedAt(data.updated_at)}`
-      : "";
-  return [data.comment, who].filter(Boolean).join("\n\n");
-}
 
 /** Браузер прокручивает overflow:hidden-контейнеры, показывая фокусный элемент, и панели разъезжаются. */
 function resetScroll(e: React.UIEvent<HTMLElement>) {
@@ -78,21 +70,41 @@ export default function Grid({ panel, frozen }: Props) {
   const headerH = Math.max(30, Math.round(BASE_HEADER * zoom));
   const gutterW = Math.max(28, Math.round(BASE_GUTTER * zoom));
   const scaled = (px: number) => Math.round(px * zoom);
+  const [viewport, setViewport] = useState({ w: 1200, h: 600 });
 
   const K = frozen.length;
   const N = rowIds.length;
   const D = days.length;
   const C = K + D;
   const frozenX = useMemo(() => {
-    const xs: number[] = [];
-    let x = 0;
-    for (const f of frozen) {
-      xs.push(x);
-      x += Math.round(f.width * zoom);
+    const widths = frozen.map((f) => Math.round(f.width * zoom));
+    const natural = widths.reduce((sum, w) => sum + w, 0);
+    const day = Math.round(BASE_CELL * zoom);
+    // Полоска прокрутки и один полный день остаются справа, остальное — под фамилии.
+    const scrollbar = 16;
+    const room = Math.max(0, viewport.w - gutterW - scrollbar);
+    const minDay = Math.min(day, Math.max(Math.round(72 * Math.min(zoom, 1)), Math.round(room * 0.42)));
+    const budget = Math.max(0, room - minDay);
+    const floors = frozen.map((f) => Math.round((MIN_FROZEN[f.field] ?? 64) * Math.min(zoom, 1)));
+    const floorSum = floors.reduce((sum, w) => sum + w, 0);
+    let used = widths;
+    if (natural > budget) {
+      if (floorSum <= budget && floorSum > 0) {
+        const extra = budget - floorSum;
+        const flex = widths.map((w, i) => Math.max(0, w - floors[i]));
+        const flexSum = flex.reduce((sum, w) => sum + w, 0) || 1;
+        used = floors.map((floor, i) => floor + Math.floor((extra * flex[i]) / flexSum));
+      } else if (floorSum > 0) {
+        const scale = budget / floorSum;
+        used = floors.map((w) => Math.max(28, Math.floor(w * scale)));
+      }
+      const drift = budget - used.reduce((sum, w) => sum + w, 0);
+      if (used.length && drift > 0) used[0] += drift;
     }
-    xs.push(x);
+    const xs = [0];
+    for (const w of used) xs.push(xs[xs.length - 1] + Math.max(0, w));
     return xs;
-  }, [frozen, zoom]);
+  }, [frozen, zoom, viewport.w, gutterW]);
   const frozenW = frozenX[K];
   const leftW = gutterW + frozenW;
 
@@ -112,7 +124,6 @@ export default function Grid({ panel, frozen }: Props) {
     setEditingState(e);
   }, []);
   const [scroll, setScroll] = useState({ top: 0, left: 0 });
-  const [viewport, setViewport] = useState({ w: 1200, h: 600 });
   const [drag, setDrag] = useState<Drag | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; r: number; c: number } | null>(null);
   const [noteEdit, setNoteEdit] = useState<{ r: number; c: number; x: number; y: number } | null>(null);
@@ -230,7 +241,7 @@ export default function Grid({ panel, frozen }: Props) {
   // ---------- Прокрутка и размеры ----------
 
   useLayoutEffect(() => {
-    const el = bodyRef.current;
+    const el = rootRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => setViewport({ w: el.clientWidth, h: el.clientHeight }));
     ro.observe(el);
@@ -1128,7 +1139,6 @@ export default function Grid({ panel, frozen }: Props) {
       if (block.c0 !== K + d) continue;
       const span = block.c1 - block.c0 + 1;
       if (d + span - 1 < d0v) continue;
-      const tipText = cellTip(data);
       bodyCells.push(
         <div
           key={`${id}|${d}`}
@@ -1141,8 +1151,12 @@ export default function Grid({ panel, frozen }: Props) {
             background: data.bg || (span > 1 ? "#fff" : undefined),
             zIndex: span > 1 || data.value ? 2 : 1,
           }}
-          onMouseEnter={tipText ? (e) => setTip({ x: e.clientX + 14, y: e.clientY + 18, text: tipText }) : undefined}
-          onMouseLeave={tipText ? () => setTip(null) : undefined}
+          onMouseEnter={
+            data.comment
+              ? (e) => setTip({ x: e.clientX + 14, y: e.clientY + 18, text: data.comment })
+              : undefined
+          }
+          onMouseLeave={data.comment ? () => setTip(null) : undefined}
         >
           {data.comment && <span className={styles.noteMark} />}
           {data.value && (
@@ -1213,7 +1227,7 @@ export default function Grid({ panel, frozen }: Props) {
           style={{
             top: r * rowH,
             left: gutterW + frozenX[i],
-            width: scaled(f.width),
+            width: frozenX[i + 1] - frozenX[i],
             height: rowH,
             background: colored ? fill : undefined,
           }}
@@ -1276,8 +1290,11 @@ export default function Grid({ panel, frozen }: Props) {
     const span = Math.max(1, block.c1 - block.c0 + 1);
     const left = inFrozen ? gutterW + frozenX[editing.c] : (block.c0 - K) * colW;
     const width = inFrozen
-      ? Math.max(scaled(frozen[editing.c].width), scaled(220))
-      : Math.max(span * colW, scaled(220));
+      ? Math.min(
+          Math.max(0, leftW - left),
+          Math.max(frozenX[editing.c + 1] - frozenX[editing.c], Math.min(scaled(220), viewport.w - 12)),
+        )
+      : Math.max(span * colW, Math.min(scaled(220), Math.max(span * colW, viewport.w - leftW - 12)));
     const lines = editing.value.split("\n").length;
     editorNode = (
       <textarea
@@ -1331,7 +1348,7 @@ export default function Grid({ panel, frozen }: Props) {
           <div
             key={f.field}
             className={`${styles.frozenHeader} ${i >= bounds.c0 && i <= bounds.c1 ? styles.headerSelected : ""}`}
-            style={{ left: gutterW + frozenX[i], width: scaled(f.width) }}
+            style={{ left: gutterW + frozenX[i], width: frozenX[i + 1] - frozenX[i] }}
           >
             {f.title}
           </div>

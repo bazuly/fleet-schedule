@@ -66,7 +66,10 @@ export default function CellHistory({ x, y, rowId, day, onClose }: Props) {
       ref={ref}
       data-no-grid
       className={styles.box}
-      style={{ left: Math.min(x, window.innerWidth - 340), top: Math.min(y, window.innerHeight - 280) }}
+      style={{
+        left: Math.max(8, Math.min(x, window.innerWidth - Math.min(320, window.innerWidth - 16) - 8)),
+        top: Math.max(8, Math.min(y, window.innerHeight - 220)),
+      }}
       onMouseDown={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
     >

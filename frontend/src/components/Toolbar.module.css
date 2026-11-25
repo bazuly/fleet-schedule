@@ -142,7 +142,7 @@
   z-index: 2000;
   top: 48px;
   width: 320px;
-  max-height: 380px;
+  max-height: min(380px, calc(100dvh - 96px));
   overflow: auto;
   padding: 6px 0 8px;
   background: #fff;
@@ -308,10 +308,67 @@
 
 .formulaInput {
   flex: 1;
+  min-width: 0;
   height: 100%;
   border: 0;
   outline: none;
   padding: 0 10px;
   font: inherit;
   background: transparent;
+}
+
+@media (max-width: 720px) {
+  .toolbar {
+    height: auto;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    align-items: center;
+    gap: 2px 4px;
+    padding: 4px max(6px, env(safe-area-inset-right)) 4px max(6px, env(safe-area-inset-left));
+    overflow: visible;
+  }
+
+  .group {
+    flex-wrap: nowrap;
+    padding-left: 6px;
+    gap: 2px;
+    max-width: 100%;
+  }
+
+  .group button,
+  .link {
+    height: 30px;
+    padding: 0 5px;
+    font-size: 12px;
+  }
+
+  .spacer {
+    display: none;
+  }
+
+  .dateLabel input {
+    width: 6.5rem;
+    max-width: 34vw;
+    height: 30px;
+  }
+
+  .user {
+    max-width: 96px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cellRef {
+    width: 88px;
+    flex-shrink: 0;
+  }
+
+  .pendingMenu {
+    width: min(320px, calc(100vw - 16px));
+  }
+
+  .formulaBar {
+    height: 36px;
+  }
 }

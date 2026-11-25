@@ -23,6 +23,7 @@
   cursor: move;
   user-select: none;
   flex-shrink: 0;
+  touch-action: none;
 }
 
 .title {
@@ -30,6 +31,10 @@
   font-size: 13px;
   color: #202124;
   letter-spacing: 0.02em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .buttons {
