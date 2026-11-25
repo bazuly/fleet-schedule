@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { api, tokenStore } from "@/lib/api";
+import ThemeButton from "@/components/ThemeButton";
 import styles from "../forms.module.css";
 
 export default function LoginPage() {
@@ -30,7 +31,10 @@ export default function LoginPage() {
   return (
     <div className={styles.page}>
       <form className={styles.card} onSubmit={submit}>
-        <h1>График транспорта</h1>
+        <div className={styles.headerRow}>
+          <h1>График транспорта</h1>
+          <ThemeButton className={styles.theme} />
+        </div>
         <label>
           Логин
           <input value={login} onChange={(e) => setLogin(e.target.value)} autoFocus autoComplete="username" />

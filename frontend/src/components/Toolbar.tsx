@@ -7,6 +7,7 @@ import { api, tokenStore } from "@/lib/api";
 import { todayIso } from "@/lib/dates";
 import { isRecentOverdue, pendingDayLabel, pendingTasks, type PendingTask } from "@/lib/pending";
 import { colDay, isDayCol, scrollBus, useStore, ZOOMS } from "@/lib/store";
+import ThemeButton from "./ThemeButton";
 import styles from "./Toolbar.module.css";
 
 const PALETTE = [
@@ -304,6 +305,7 @@ export default function Toolbar({ visible, onToggle }: Props) {
       <div className={styles.spacer} />
 
       <div className={styles.group}>
+        <ThemeButton activeClassName={styles.toggleOn} />
         <span
           className={`${styles.status} ${styles[wsStatus]}`}
           title={wsStatus === "online" ? "Онлайн: изменения синхронизируются" : "Нет связи с сервером"}

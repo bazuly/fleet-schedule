@@ -1148,7 +1148,7 @@ export default function Grid({ panel, frozen }: Props) {
             top: r * rowH + 1,
             width: span * colW - 1,
             height: rowH - 1,
-            background: data.bg || (span > 1 ? "#fff" : undefined),
+            background: data.bg || (span > 1 ? "var(--surface)" : undefined),
             zIndex: span > 1 || data.value ? 2 : 1,
           }}
           onMouseEnter={
@@ -1162,7 +1162,7 @@ export default function Grid({ panel, frozen }: Props) {
           {data.value && (
             <span
               className={styles.cellText}
-              style={{ width: span * colW - 5, height: rowH - 5, color: data.fg || undefined }}
+              style={{ width: span * colW - 5, height: rowH - 5, color: data.fg || (data.bg ? "#202124" : undefined) }}
             >
               <span>{data.value}</span>
             </span>
@@ -1230,6 +1230,7 @@ export default function Grid({ panel, frozen }: Props) {
             width: frozenX[i + 1] - frozenX[i],
             height: rowH,
             background: colored ? fill : undefined,
+            color: colored ? "#202124" : undefined,
           }}
           title={v.length > 20 ? v : undefined}
         >

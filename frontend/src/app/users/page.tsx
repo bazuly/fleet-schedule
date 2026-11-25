@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api, type User } from "@/lib/api";
+import ThemeButton from "@/components/ThemeButton";
 import styles from "../forms.module.css";
 
 export default function UsersPage() {
@@ -73,7 +74,10 @@ export default function UsersPage() {
       <div className={`${styles.card} ${styles.wide}`}>
         <div className={styles.headerRow}>
           <h1>Пользователи</h1>
-          <Link href="/">← К графику</Link>
+          <div className={styles.headerActions}>
+            <ThemeButton className={styles.theme} />
+            <Link href="/">← К графику</Link>
+          </div>
         </div>
 
         <table className={styles.table}>
