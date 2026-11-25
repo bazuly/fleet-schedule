@@ -8,6 +8,8 @@ import type { MapTarget } from "@/lib/store";
 import styles from "./MapView.module.css";
 
 const REFRESH_MS = 30_000;
+/** Светлая подложка OSM. Тёмные тайлы CARTO с сентября 2026 без ключа не отдаются. */
+const TILES = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const KIND_LABEL = { tractor: "Тягач", trailer: "Прицеп" } as const;
 const KIND_COLOR = { tractor: "#1a73e8", trailer: "#e8710a" } as const;
 
@@ -67,7 +69,7 @@ export default function MapView({ target }: Props) {
       if (cancelled || !boxRef.current) return;
       leafletRef.current = L;
       map = L.map(boxRef.current, { zoomControl: true, attributionControl: false }).setView([59.94, 30.31], 6);
-      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(map);
+      L.tileLayer(TILES, { maxZoom: 19 }).addTo(map);
       layerRef.current = L.layerGroup().addTo(map);
       mapRef.current = map;
       ro = new ResizeObserver(() => map?.invalidateSize());

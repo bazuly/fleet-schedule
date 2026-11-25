@@ -6,22 +6,22 @@
   display: flex;
   flex-direction: column;
   padding: 12px 0 8px;
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
-  border: 1px solid #dadce0;
-  box-shadow: 0 8px 24px rgba(60, 64, 67, 0.28);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow-lg);
 }
 
 .title {
   padding: 0 12px 8px;
   font-weight: 700;
   font-size: 13px;
-  color: #202124;
+  color: var(--text);
 }
 
 .empty {
   padding: 0 12px 8px;
-  color: #5f6368;
+  color: var(--text-3);
   font-size: 13px;
   line-height: 1.4;
 }
@@ -35,7 +35,7 @@
 }
 
 .entry + .entry {
-  border-top: 1px solid #f1f3f4;
+  border-top: 1px solid var(--line-soft);
 }
 
 .meta {
@@ -48,13 +48,13 @@
 .who {
   font-weight: 600;
   font-size: 13px;
-  color: #202124;
+  color: var(--text);
 }
 
 .when {
   flex: none;
   font-size: 11px;
-  color: #80868b;
+  color: var(--text-4);
 }
 
 .what {
@@ -62,7 +62,7 @@
   align-items: flex-start;
   gap: 6px;
   margin-top: 2px;
-  color: #3c4043;
+  color: var(--text-2);
   font-size: 13px;
   line-height: 1.35;
   white-space: pre-wrap;
@@ -73,6 +73,6 @@
   height: 12px;
   margin-top: 3px;
   border-radius: 3px;
-  border: 1px solid rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--swatch-border);
   flex: none;
 }

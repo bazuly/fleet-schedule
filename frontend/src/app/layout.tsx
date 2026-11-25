@@ -14,8 +14,16 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="ru">
-      <body>{children}</body>
+    <html lang="ru" suppressHydrationWarning>
+      <body>
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              'try{if(localStorage.getItem("fleet.theme")==="dark")document.documentElement.setAttribute("data-theme","dark")}catch(e){}',
+          }}
+        />
+        {children}
+      </body>
     </html>
   );
 }

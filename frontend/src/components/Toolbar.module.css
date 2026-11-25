@@ -4,8 +4,8 @@
   gap: 10px;
   height: 46px;
   padding: 0 12px;
-  background: #f9fbfd;
-  border-bottom: 1px solid #e0e3e7;
+  background: var(--surface-3);
+  border-bottom: 1px solid var(--line);
   font-size: 13px;
   flex-shrink: 0;
   overflow-x: auto;
@@ -19,7 +19,7 @@
   align-items: center;
   gap: 4px;
   padding-left: 10px;
-  border-left: 1px solid #e0e3e7;
+  border-left: 1px solid var(--line);
 }
 
 .toolbar > .group:first-child {
@@ -34,7 +34,7 @@
   border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
-  color: #3c4043;
+  color: var(--text-2);
   cursor: pointer;
   font: inherit;
   white-space: nowrap;
@@ -45,17 +45,17 @@
 
 .group button:hover:not(:disabled),
 .link:hover {
-  background: #e8eaed;
+  background: var(--hover);
 }
 
 .group button:disabled {
-  color: #bdc1c6;
+  color: var(--disabled);
   cursor: default;
 }
 
 .toggleOn {
-  background: #d3e3fd !important;
-  color: #0b57d0 !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-text) !important;
 }
 
 .fillIcon {
@@ -65,7 +65,7 @@
 .fontIcon {
   margin-right: 4px;
   font-weight: 700;
-  color: #1a73e8;
+  color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -77,9 +77,9 @@
   grid-template-columns: repeat(6, 22px);
   gap: 4px;
   padding: 10px;
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(60, 64, 67, 0.3);
+  box-shadow: var(--shadow);
 }
 
 .palette .swatch {
@@ -91,7 +91,7 @@
 }
 
 .palette .swatch:hover {
-  outline: 2px solid #1a73e8;
+  outline: 2px solid var(--accent);
 }
 
 .zoomMenu {
@@ -101,9 +101,9 @@
   flex-direction: column;
   min-width: 88px;
   padding: 6px;
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(60, 64, 67, 0.3);
+  box-shadow: var(--shadow);
 }
 
 .zoomMenu button {
@@ -145,15 +145,15 @@
   max-height: min(380px, calc(100dvh - 96px));
   overflow: auto;
   padding: 6px 0 8px;
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(60, 64, 67, 0.3);
+  box-shadow: var(--shadow);
 }
 
 .pendingHead {
   padding: 4px 12px 6px;
   font-weight: 700;
-  color: #202124;
+  color: var(--text);
 }
 
 .pendingSection {
@@ -162,14 +162,14 @@
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: #5f6368;
+  color: var(--text-3);
 }
 
 .pendingPanel {
   padding: 4px 12px 0;
   font-size: 11px;
   font-weight: 600;
-  color: #80868b;
+  color: var(--text-4);
 }
 
 .pendingMenu button {
@@ -187,13 +187,13 @@
 }
 
 .pendingWhen {
-  color: #1a73e8;
+  color: var(--accent);
   font-size: 11px;
   font-weight: 700;
 }
 
 .pendingLate {
-  color: #c5221f;
+  color: var(--danger);
   font-size: 11px;
   font-weight: 700;
 }
@@ -205,12 +205,12 @@
   width: calc(100% - 16px);
   padding: 6px 8px;
   border-radius: 6px;
-  color: #1a73e8;
+  color: var(--accent);
   font-weight: 600;
 }
 
 .pendingText {
-  color: #202124;
+  color: var(--text);
   white-space: pre-wrap;
   overflow: hidden;
   display: -webkit-box;
@@ -221,30 +221,31 @@
 .palette .noFill {
   grid-column: 1 / -1;
   justify-content: center;
-  border: 1px solid #dadce0;
+  border: 1px solid var(--line-strong);
 }
 
 .dateLabel {
   display: flex;
   align-items: center;
   gap: 4px;
-  color: #5f6368;
+  color: var(--text-3);
 }
 
 .dateLabel input {
   height: 26px;
-  border: 1px solid #dadce0;
+  border: 1px solid var(--line-strong);
   border-radius: 6px;
   padding: 0 6px;
   font: inherit;
-  color: #202124;
+  color: var(--text);
+  background: var(--input-bg);
 }
 
 .checkbox {
   display: flex;
   align-items: center;
   gap: 4px;
-  color: #5f6368;
+  color: var(--text-3);
   margin-left: 4px;
 }
 
@@ -272,7 +273,7 @@
 }
 
 .user {
-  color: #3c4043;
+  color: var(--text-2);
   font-weight: 500;
   margin: 0 6px 0 2px;
 }
@@ -281,8 +282,8 @@
   display: flex;
   align-items: center;
   height: 30px;
-  border-bottom: 1px solid #e0e3e7;
-  background: #fff;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
   font-size: 13px;
   flex-shrink: 0;
 }
@@ -290,19 +291,19 @@
 .cellRef {
   width: 260px;
   padding: 0 10px;
-  color: #3c4043;
+  color: var(--text-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  border-right: 1px solid #e0e3e7;
+  border-right: 1px solid var(--line);
   line-height: 30px;
 }
 
 .fx {
   padding: 0 10px;
-  color: #80868b;
+  color: var(--text-4);
   font-style: italic;
-  border-right: 1px solid #e0e3e7;
+  border-right: 1px solid var(--line);
   line-height: 30px;
 }
 
@@ -314,6 +315,7 @@
   outline: none;
   padding: 0 10px;
   font: inherit;
+  color: var(--text);
   background: transparent;
 }
 

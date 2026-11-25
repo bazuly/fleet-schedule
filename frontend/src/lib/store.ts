@@ -534,10 +534,18 @@ export const useStore = create<State>((set, get) => {
 type ScrollListener = (source: string, left: number) => void;
 type DayListener = (day: string) => void;
 
+export interface RevealTarget {
+  panel: Panel;
+  rowId: string;
+  day: string;
+}
+type CellListener = (target: RevealTarget) => void;
+
 /** Шина для синхронной горизонтальной прокрутки графика и плавающих окон. */
 export const scrollBus = {
   listeners: new Set<ScrollListener>(),
   dayListeners: new Set<DayListener>(),
+  cellListeners: new Set<CellListener>(),
   emit(source: string, left: number) {
     for (const l of this.listeners) l(source, left);
   },
@@ -551,5 +559,13 @@ export const scrollBus = {
   subscribeDay(l: DayListener) {
     this.dayListeners.add(l);
     return () => void this.dayListeners.delete(l);
+  },
+  /** Выделяет клетку рейса и прокручивает к ней только указанную таблицу. */
+  revealCell(target: RevealTarget) {
+    for (const l of this.cellListeners) l(target);
+  },
+  subscribeCell(l: CellListener) {
+    this.cellListeners.add(l);
+    return () => void this.cellListeners.delete(l);
   },
 };
