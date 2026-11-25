@@ -62,6 +62,7 @@ export default function Grid({ panel, frozen }: Props) {
   const today = todayIso();
   const todayIdx = days.indexOf(today);
   const zoom = useStore((s) => s.zoom);
+  const focusDay = useStore((s) => s.focusDay);
   const rowH = Math.round(BASE_CELL * zoom);
   const colW = Math.round(BASE_CELL * zoom);
   const headerH = Math.max(30, Math.round(BASE_HEADER * zoom));
@@ -230,6 +231,11 @@ export default function Grid({ panel, frozen }: Props) {
     const el = bodyRef.current!;
     setScroll({ top: el.scrollTop, left: el.scrollLeft });
     setTip(null);
+    if (panel === "main" && D > 0) {
+      const idx = Math.min(D - 1, Math.max(0, Math.round(el.scrollLeft / colW) + 2));
+      const day = days[idx];
+      if (day) useStore.getState().setFocusDay(day);
+    }
     if (suppressSyncRef.current) {
       suppressSyncRef.current = false;
       return;
@@ -295,12 +301,19 @@ export default function Grid({ panel, frozen }: Props) {
   );
   useEffect(() => scrollBus.subscribeDay(scrollToDay), [scrollToDay]);
 
-  const initialScrollDone = useRef(false);
+  const scrollToDayRef = useRef(scrollToDay);
+  scrollToDayRef.current = scrollToDay;
+  const focusDayRef = useRef(focusDay);
+  focusDayRef.current = focusDay;
+  // При открытии и при смене периода возвращаемся к сохранённому дню, а не к сегодня.
   useEffect(() => {
-    if (initialScrollDone.current || todayIdx < 0) return;
-    initialScrollDone.current = true;
-    scrollToDay(today);
-  }, [todayIdx, today, scrollToDay]);
+    const saved = focusDayRef.current;
+    const day = saved && days.includes(saved) ? saved : today;
+    if (!days.includes(day)) return;
+    scrollToDayRef.current(day);
+    // days и today читаем на момент смены диапазона, чтобы масштаб не сбрасывал прокрутку.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range.from, range.to]);
 
   const ensureVisible = useCallback(
     (p: Pos) => {

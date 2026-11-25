@@ -98,6 +98,7 @@ export default function Workspace() {
       try {
         const user = await api.me();
         useStore.getState().setUser(user);
+        await useStore.getState().loadCalendar();
         await useStore.getState().loadAll();
         setReady(true);
         disconnect = connectRealtime();

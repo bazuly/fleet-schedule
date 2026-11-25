@@ -36,6 +36,13 @@ export interface Cell {
 
 export type RowPatch = { id: string } & Partial<Pick<Row, RowField | "position" | "status">>;
 
+/** Общий период графика: границы и день, к которому прокручен вид. */
+export interface CalendarView {
+  from: string;
+  to: string;
+  focus: string;
+}
+
 export type ServerEvent =
   | { type: "cells"; by: string; client: string | null; cells: Cell[] }
   | { type: "rows"; by: string; client: string | null; rows: Row[] }
@@ -113,6 +120,9 @@ export const api = {
   cells: (from: string, to: string) =>
     request<Cell[]>("GET", `/cells?from=${from}&to=${to}`),
   putCells: (cells: Cell[]) => request("PUT", "/cells", { cells }),
+
+  calendar: () => request<CalendarView | null>("GET", "/calendar"),
+  saveCalendar: (view: CalendarView) => request<CalendarView>("PUT", "/calendar", view),
 
   locate: (plates: string[]) =>
     request<Located[]>("GET", `/navigation/locate?plates=${encodeURIComponent(plates.join(","))}`),

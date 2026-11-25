@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 import { addDays, todayIso } from "./dates";
-import { api, type Cell, type Panel, type Row, type RowField, type RowPatch, type User } from "./api";
+import { api, type CalendarView, type Cell, type Panel, type Row, type RowField, type RowPatch, type User } from "./api";
 
 /** Ключ колонки: "f:driver" — закреплённое поле строки, "d:2026-11-25" — день графика. */
 export type ColKey = string;
@@ -82,6 +82,8 @@ interface State {
   rows: Record<string, Row>;
   cells: Map<string, CellData>;
   range: { from: string; to: string };
+  /** День, к которому прокручен график. Общий для всех пользователей. */
+  focusDay: string | null;
   loading: boolean;
   wsStatus: WsStatus;
   toast: string | null;
@@ -97,6 +99,8 @@ interface State {
 
   setUser(u: User | null): void;
   setRange(from: string, to: string): Promise<void>;
+  setFocusDay(day: string): void;
+  loadCalendar(): Promise<void>;
   loadAll(): Promise<void>;
   setWsStatus(s: WsStatus): void;
   showToast(msg: string): void;
@@ -144,6 +148,17 @@ export function sortedRowIds(rows: Record<string, Row>, panel: Panel): string[] 
     .map((r) => r.id);
 }
 
+let focusSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+function rememberCalendar(view: CalendarView) {
+  if (focusSaveTimer) clearTimeout(focusSaveTimer);
+  focusSaveTimer = setTimeout(() => {
+    api.saveCalendar(view).catch((e) => {
+      useStore.getState().showToast(`Не удалось сохранить период: ${(e as Error).message}`);
+    });
+  }, 500);
+}
+
 export const useStore = create<State>((set, get) => {
   /** Применяет пакет локально и отправляет его на сервер. */
   function commit(cells: Cell[], patches: RowPatch[]) {
@@ -179,6 +194,7 @@ export const useStore = create<State>((set, get) => {
     rows: {},
     cells: new Map(),
     range: defaultRange(),
+    focusDay: null,
     loading: false,
     wsStatus: "connecting",
     toast: null,
@@ -192,8 +208,38 @@ export const useStore = create<State>((set, get) => {
 
     setUser: (user) => set({ user }),
 
+    async loadCalendar() {
+      try {
+        const view = await api.calendar();
+        if (view && view.from && view.to && view.from <= view.to) {
+          set({ range: { from: view.from, to: view.to }, focusDay: view.focus || view.from });
+        }
+      } catch {
+        // Период по умолчанию, если сервер ещё без сохранённого вида.
+      }
+    },
+
+    setFocusDay(day) {
+      if (!day || get().focusDay === day) return;
+      const { range } = get();
+      if (day < range.from || day > range.to) return;
+      set({ focusDay: day });
+      rememberCalendar({ from: range.from, to: range.to, focus: day });
+    },
+
     async setRange(from, to) {
-      set({ range: { from, to } });
+      if (!from || !to || from > to) return;
+      if (from === get().range.from && to === get().range.to) return;
+      let focus = get().focusDay;
+      if (!focus || focus < from || focus > to) focus = from;
+      if (focusSaveTimer) clearTimeout(focusSaveTimer);
+      set({ range: { from, to }, focusDay: focus });
+      try {
+        const saved = await api.saveCalendar({ from, to, focus });
+        set({ range: { from: saved.from, to: saved.to }, focusDay: saved.focus });
+      } catch (e) {
+        get().showToast(`Не удалось сохранить период: ${(e as Error).message}`);
+      }
       await get().loadAll();
     },
 
