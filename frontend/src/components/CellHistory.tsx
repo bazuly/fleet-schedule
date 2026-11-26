@@ -21,6 +21,7 @@ function summary(change: CellChange): string {
   if (comment) return `Комментарий: ${comment}`;
   if (change.bg) return "Заливка";
   if (change.fg) return "Цвет текста";
+  if (change.sent) return "Данные отправлены";
   if (change.span > 1) return `Объединение на ${change.span} дн.`;
   return "Изменение";
 }

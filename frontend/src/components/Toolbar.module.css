@@ -70,6 +70,48 @@
   text-underline-offset: 2px;
 }
 
+.markBtn {
+  width: 32px;
+  padding: 0;
+  justify-content: center;
+  font-size: 16px;
+}
+
+.mailIcon {
+  width: 20px;
+  height: 20px;
+  display: block;
+  overflow: visible;
+}
+
+.mailSheet {
+  fill: #fffdf8;
+  stroke: #8d6a3a;
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+}
+
+.mailLine {
+  fill: none;
+  stroke: #c4a574;
+  stroke-width: 1.1;
+  stroke-linecap: round;
+}
+
+.mailBody {
+  fill: #fff4d8;
+  stroke: #8d6a3a;
+  stroke-width: 1.3;
+  stroke-linejoin: round;
+}
+
+.mailFlap {
+  fill: #ffe3b0;
+  stroke: #8d6a3a;
+  stroke-width: 1.3;
+  stroke-linejoin: round;
+}
+
 .palette {
   position: fixed;
   z-index: 2000;
@@ -350,6 +392,16 @@
 :global(html[data-app]) .group button,
 :global(html[data-app]) .link {
   height: 40px;
+}
+
+:global(html[data-app]) .markBtn {
+  width: 40px;
+  font-size: 18px;
+}
+
+:global(html[data-app]) .mailIcon {
+  width: 24px;
+  height: 24px;
 }
 
 :global(html[data-app]) .dateLabel input {

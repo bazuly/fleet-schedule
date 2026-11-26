@@ -545,12 +545,14 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
     const fgs: (string | null)[][] = [];
     const comments: string[][] = [];
     const spans: number[][] = [];
+    const sents: boolean[][] = [];
     for (let r = bounds.r0; r <= bounds.r1; r++) {
       const vr: string[] = [];
       const br: (string | null)[] = [];
       const fr: (string | null)[] = [];
       const cr: string[] = [];
       const sr: number[] = [];
+      const tr: boolean[] = [];
       for (let c = bounds.c0; c <= bounds.c1; c++) {
         const cell = cellAt(r, c);
         const block = blockAt(r, c);
@@ -559,20 +561,22 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
         fr.push(block.c0 === c ? (cell?.fg ?? null) : null);
         cr.push(block.c0 === c ? (cell?.comment ?? "") : "");
         sr.push(block.c0 === c ? block.c1 - block.c0 + 1 : 1);
+        tr.push(block.c0 === c ? !!cell?.sent : false);
       }
       values.push(vr);
       bgs.push(br);
       fgs.push(fr);
       comments.push(cr);
       spans.push(sr);
+      sents.push(tr);
     }
-    return { values, bgs, fgs, comments, spans };
+    return { values, bgs, fgs, comments, spans, sents };
   }, [bounds, valueAt, cellAt, blockAt]);
 
   const doCopy = useCallback(
     (cut: boolean, dt?: DataTransfer | null) => {
       if (N === 0) return;
-      const { values, bgs, fgs, comments, spans } = selectionMatrix();
+      const { values, bgs, fgs, comments, spans, sents } = selectionMatrix();
       const tsv = toTsv(values);
       if (dt) {
         dt.setData("text/plain", tsv);
@@ -589,6 +593,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
         fgs,
         comments,
         spans,
+        sents,
         cut: cut
           ? { gridId: panel, rowIds: rowIds.slice(bounds.r0, bounds.r1 + 1), colKeys: cols }
           : undefined,
@@ -608,6 +613,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
       const fgs = internal ? internal.fgs : null;
       const comments = internal ? internal.comments : null;
       const spans = internal ? internal.spans : null;
+      const sents = internal ? internal.sents : null;
       if (!values.length || !values[0].length) return;
 
       const h = values.length;
@@ -632,6 +638,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
             if (comments && (!single || (r === r0 && c === c0))) edit.comment = comments[sr]?.[sc] ?? "";
             const span = spans?.[sr]?.[sc] ?? 1;
             if (span > 1) edit.span = span;
+            if (sents) edit.sent = !!sents[sr]?.[sc];
           }
           target.set(`${edit.rowId}|${edit.col}`, edit);
         }
@@ -645,7 +652,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
             if (!target.has(k)) {
               edits.push(
                 col.startsWith("d:")
-                  ? { rowId, col, value: "", bg: null, fg: null, comment: "" }
+                  ? { rowId, col, value: "", bg: null, fg: null, comment: "", sent: false }
                   : { rowId, col, value: "" },
               );
             }
@@ -716,6 +723,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
             const src = cellAt(sr, sc);
             edit.bg = src?.bg ?? null;
             edit.fg = src?.fg ?? null;
+            edit.sent = !!src?.sent;
             edit.span = 1;
           }
           edits.push(edit);
@@ -1080,7 +1088,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
       for (let c = c0 + 1; c <= c1; c++) {
         const cell = cellAt(r, c);
         if (cell?.value) losesText = true;
-        if (cell) edits.push({ rowId: rowIds[r], col: colKey(c), value: "", bg: null, fg: null, comment: "", span: 1 });
+        if (cell) edits.push({ rowId: rowIds[r], col: colKey(c), value: "", bg: null, fg: null, comment: "", span: 1, sent: false });
       }
       edits.push({
         rowId: rowIds[r],
@@ -1090,6 +1098,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
         fg: anchor?.fg ?? null,
         comment: anchor?.comment ?? "",
         span: c1 - c0 + 1,
+        sent: !!anchor?.sent,
       });
     }
     if (!edits.length) return;
@@ -1111,7 +1120,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
         for (let k = block.c0 + 1; k <= block.c1; k++) {
           const cell = cellAt(r, k);
           if (cell && !cell.value && !cell.comment) {
-            edits.push({ rowId: rowIds[r], col: colKey(k), value: "", bg: null, fg: null, comment: "", span: 1 });
+            edits.push({ rowId: rowIds[r], col: colKey(k), value: "", bg: null, fg: null, comment: "", span: 1, sent: false });
           }
         }
       }
@@ -1307,6 +1316,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
           }
           onMouseLeave={data.comment ? () => setTip(null) : undefined}
         >
+          {data.sent && <span className={styles.sentMark} />}
           {data.comment && <span className={styles.noteMark} />}
           {data.value && (
             <span

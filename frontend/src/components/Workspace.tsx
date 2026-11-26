@@ -7,6 +7,7 @@ import { connectRealtime } from "@/lib/realtime";
 import { useStore } from "@/lib/store";
 import FloatingWindow, { type WindowGeometry } from "./FloatingWindow";
 import Grid, { type FrozenCol } from "./Grid";
+import FleetMap from "./FleetMap";
 import MapView from "./MapView";
 import Toolbar, { FormulaBar, type PanelKey } from "./Toolbar";
 import styles from "./Workspace.module.css";
@@ -39,6 +40,7 @@ const WINDOWS_KEY = "fleet.windows";
 const NAMES_KEY = "fleet.namesCollapsed";
 const MAPS_KEY = "fleet.mapWindows";
 const OPEN_MAPS_KEY = "fleet.openMaps";
+const FLEET_KEY = "fleet.fleetOpen";
 
 function defaultMapGeometry(index: number): WindowGeometry {
   const w = typeof window === "undefined" ? 1400 : window.innerWidth;
@@ -118,14 +120,24 @@ export default function Workspace() {
   const loading = useStore((s) => s.loading);
   const [narrow, setNarrow] = useState(false);
   const [namesCollapsed, setNamesCollapsed] = useState(false);
+  const [fleetOpen, setFleetOpen] = useState(false);
 
   useLayoutEffect(() => {
+    setFleetOpen(localStorage.getItem(FLEET_KEY) === "1");
     setNamesCollapsed(localStorage.getItem(NAMES_KEY) === "1");
     const mq = window.matchMedia("(max-width: 720px)");
     const apply = () => setNarrow(mq.matches);
     apply();
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
+  }, []);
+
+  const toggleFleet = useCallback(() => {
+    setFleetOpen((prev) => {
+      const next = !prev;
+      localStorage.setItem(FLEET_KEY, next ? "1" : "0");
+      return next;
+    });
   }, []);
 
   const toggleNames = useCallback(() => {
@@ -242,11 +254,18 @@ export default function Workspace() {
         onShow={showPanel}
         namesCollapsed={namesCollapsed}
         onToggleNames={toggleNames}
+        fleetOpen={fleetOpen}
+        onToggleFleet={toggleFleet}
       />
       <FormulaBar />
-      <div className={styles.main}>
+      <div className={styles.main} style={fleetOpen ? { display: "none" } : undefined}>
         <Grid panel="main" frozen={MAIN_COLUMNS} hideFrozen={narrow && namesCollapsed} />
       </div>
+      {fleetOpen && (
+        <div className={styles.main}>
+          <FleetMap />
+        </div>
+      )}
 
       {(Object.keys(PANEL_TITLES) as PanelKey[]).map(
         (p) =>

@@ -259,6 +259,16 @@
   pointer-events: none;
 }
 
+.sentMark {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border-top: 16px solid #ff00cc;
+  border-right: 16px solid transparent;
+  z-index: 4;
+  pointer-events: none;
+}
+
 .cellText {
   position: absolute;
   left: 2px;

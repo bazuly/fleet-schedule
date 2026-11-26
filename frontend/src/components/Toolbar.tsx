@@ -6,8 +6,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, tokenStore } from "@/lib/api";
 import { todayIso } from "@/lib/dates";
 import { isRecentOverdue, pendingDayLabel, pendingTasks, type PendingTask } from "@/lib/pending";
-import { unnotifiedLabel, unnotifiedTrips, type UnnotifiedTrip } from "@/lib/unnotified";
-import { colDay, isDayCol, scrollBus, useStore, ZOOMS } from "@/lib/store";
+import { isNotifiedColor, unnotifiedLabel, unnotifiedTrips, type UnnotifiedTrip } from "@/lib/unnotified";
+import { cellKey, colDay, isDayCol, scrollBus, useStore, ZOOMS } from "@/lib/store";
 import ThemeButton from "./ThemeButton";
 import styles from "./Toolbar.module.css";
 
@@ -36,6 +36,8 @@ interface Props {
   onShow(panel: PanelKey): void;
   namesCollapsed: boolean;
   onToggleNames(): void;
+  fleetOpen: boolean;
+  onToggleFleet(): void;
 }
 
 /** Кнопки тулбара не забирают фокус у таблицы, чтобы не терять выделение. */
@@ -48,7 +50,7 @@ function placeMenu(rect: DOMRect, menuW: number) {
   };
 }
 
-export default function Toolbar({ visible, onToggle, onShow, namesCollapsed, onToggleNames }: Props) {
+export default function Toolbar({ visible, onToggle, onShow, namesCollapsed, onToggleNames, fleetOpen, onToggleFleet }: Props) {
   const router = useRouter();
   const user = useStore((s) => s.user);
   const range = useStore((s) => s.range);
@@ -81,6 +83,23 @@ export default function Toolbar({ visible, onToggle, onShow, namesCollapsed, onT
   const dayCols = active?.colKeys.filter(isDayCol).length ?? 0;
   const canMerge = dayCols > 1;
   const canNotify = dayCols > 0;
+  const anchorCell =
+    active && isDayCol(active.anchorCol)
+      ? cells.get(cellKey(active.anchorRowId, colDay(active.anchorCol)))
+      : undefined;
+  const anchorSent = !!anchorCell?.sent;
+  const anchorNotified = isNotifiedColor(anchorCell?.fg);
+  const notifyActive = () => {
+    const state = useStore.getState();
+    const a = state.active;
+    if (!a) return;
+    const targets: { rowId: string; col: string }[] = [];
+    for (const rowId of a.rowIds) for (const col of a.colKeys) if (isDayCol(col)) targets.push({ rowId, col });
+    const allTold =
+      targets.length > 0 &&
+      targets.every(({ rowId, col }) => isNotifiedColor(state.cells.get(cellKey(rowId, colDay(col)))?.fg));
+    state.applyFgToActive(allTold ? "#000000" : "#ffff00");
+  };
   const paletteOpen = palette !== null;
   const setPaletteOpen = (open: boolean) => {
     if (!open) return setPalette(null);
@@ -297,10 +316,27 @@ export default function Toolbar({ visible, onToggle, onShow, namesCollapsed, onT
         <button
           onMouseDown={keepFocus}
           disabled={!canNotify}
-          title="Пометить водителя оповещённым: жёлтый текст"
-          onClick={() => useStore.getState().applyFgToActive("#ffff00")}
+          className={`${styles.markBtn} ${anchorNotified ? styles.toggleOn : ""}`}
+          title="оповещен"
+          aria-label="оповещен"
+          onClick={notifyActive}
         >
-          Оповещен
+          <span aria-hidden>📞</span>
+        </button>
+        <button
+          onMouseDown={keepFocus}
+          disabled={!canNotify}
+          className={`${styles.markBtn} ${anchorSent ? styles.toggleOn : ""}`}
+          title="Данные отправлены"
+          aria-label="Данные отправлены"
+          onClick={() => useStore.getState().applySentToActive()}
+        >
+          <svg className={styles.mailIcon} viewBox="0 0 24 24" aria-hidden="true">
+            <path className={styles.mailSheet} d="M7 3.2h10a1 1 0 0 1 1 1V11H6V4.2a1 1 0 0 1 1-1z" />
+            <path className={styles.mailLine} d="M8.2 5.6h7.6M8.2 7.6h5" />
+            <path className={styles.mailBody} d="M2.2 8.4h19.6v12.2H2.2z" />
+            <path className={styles.mailFlap} d="M2.2 8.4 12 15.6 21.8 8.4" />
+          </svg>
         </button>
       </div>
 
@@ -364,6 +400,14 @@ export default function Toolbar({ visible, onToggle, onShow, namesCollapsed, onT
           onClick={() => onToggle("pickups")}
         >
           Заборы продукции
+        </button>
+        <button
+          onMouseDown={keepFocus}
+          className={fleetOpen ? styles.toggleOn : ""}
+          title="Все машины на одной карте. Свободные подсвечены зелёным"
+          onClick={onToggleFleet}
+        >
+          Карта
         </button>
         <label className={styles.checkbox} title="Окна следуют за прокруткой основного графика. Их собственная прокрутка график не сдвигает">
           <input

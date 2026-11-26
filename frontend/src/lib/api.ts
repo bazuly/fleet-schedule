@@ -42,6 +42,8 @@ export interface Cell {
   bg: string | null;
   fg: string | null;
   comment: string;
+  /** Данные за этот день отправлены поставщику. */
+  sent: boolean;
   /** Сколько дней занимает ячейка, начиная с этой даты. */
   span: number;
   updated_by?: string | null;
@@ -58,6 +60,7 @@ export interface CellChange {
   bg: string | null;
   fg: string | null;
   span: number;
+  sent: boolean;
   deleted: boolean;
 }
 

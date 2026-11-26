@@ -23,7 +23,8 @@ use crate::{
 /// Axenta отдаёт состояние всех объектов одним списком — держим его недолго, чтобы
 /// окна карты у нескольких диспетчеров не дёргали API на каждый запрос.
 const CACHE_TTL: Duration = Duration::from_secs(20);
-const MAX_PLATES: usize = 10;
+/// Общая карта запрашивает номер каждой машины из списка одним вызовом.
+const MAX_PLATES: usize = 400;
 
 pub struct Axenta {
     http: reqwest::Client,

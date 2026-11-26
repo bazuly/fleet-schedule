@@ -20,6 +20,8 @@ export interface CellData {
   bg: string | null;
   fg: string | null;
   comment: string;
+  /** Данные за этот день отправлены поставщику. */
+  sent: boolean;
   /** Сколько дней занимает ячейка. 1 — обычная клетка. */
   span: number;
   updated_by?: string | null;
@@ -27,10 +29,10 @@ export interface CellData {
   updated_at?: string | null;
 }
 
-export const EMPTY_CELL: CellData = { value: "", bg: null, fg: null, comment: "", span: 1 };
+export const EMPTY_CELL: CellData = { value: "", bg: null, fg: null, comment: "", span: 1, sent: false };
 
 export function isBlank(c: CellData): boolean {
-  return (c.span ?? 1) <= 1 && !c.value && !c.bg && !c.fg && !c.comment;
+  return (c.span ?? 1) <= 1 && !c.value && !c.bg && !c.fg && !c.comment && !c.sent;
 }
 
 export function toCellData(c: Cell): CellData {
@@ -40,6 +42,7 @@ export function toCellData(c: Cell): CellData {
     fg: c.fg,
     comment: c.comment ?? "",
     span: c.span || 1,
+    sent: !!c.sent,
     updated_by: c.updated_by ?? null,
     updated_by_name: c.updated_by_name ?? null,
     updated_at: c.updated_at ?? null,
@@ -54,6 +57,7 @@ export interface Edit {
   fg?: string | null;
   comment?: string;
   span?: number;
+  sent?: boolean;
 }
 
 interface Batch {
@@ -78,6 +82,7 @@ export interface ClipboardData {
   fgs: (string | null)[][];
   comments: string[][];
   spans: number[][];
+  sents: boolean[][];
   cut?: { gridId: Panel; rowIds: string[]; colKeys: ColKey[] };
 }
 
@@ -134,6 +139,7 @@ interface State {
   closeMap(rowId: string): void;
   applyBgToActive(bg: string | null): void;
   applyFgToActive(fg: string | null): void;
+  applySentToActive(): void;
   mergeActive(): void;
   setRowStatus(rowId: string, status: string): void;
 
@@ -340,13 +346,21 @@ export const useStore = create<State>((set, get) => {
           const bg = e.bg !== undefined ? e.bg : prev.bg;
           const fg = e.fg !== undefined ? e.fg : prev.fg;
           const comment = e.comment !== undefined ? e.comment : prev.comment;
+          const sent = e.sent !== undefined ? e.sent : !!prev.sent;
           let span = e.span !== undefined ? Math.max(1, Math.min(62, e.span)) : prev.span || 1;
           // Пустая клетка не может оставаться объединением, если ширину не задали явно.
-          if (!value && !bg && !fg && !comment && !(e.span !== undefined && e.span > 1)) span = 1;
-          if (value === prev.value && bg === prev.bg && fg === prev.fg && comment === prev.comment && span === (prev.span || 1))
+          if (!value && !bg && !fg && !comment && !sent && !(e.span !== undefined && e.span > 1)) span = 1;
+          if (
+            value === prev.value &&
+            bg === prev.bg &&
+            fg === prev.fg &&
+            comment === prev.comment &&
+            sent === !!prev.sent &&
+            span === (prev.span || 1)
+          )
             continue;
-          cellsBefore.push({ row_id: e.rowId, day, ...prev, span: prev.span || 1 });
-          cellsAfter.push({ row_id: e.rowId, day, value, bg, fg, comment, span });
+          cellsBefore.push({ row_id: e.rowId, day, ...prev, span: prev.span || 1, sent: !!prev.sent });
+          cellsAfter.push({ row_id: e.rowId, day, value, bg, fg, comment, span, sent });
         } else if (e.value !== undefined) {
           const field = colField(e.col);
           const prev = rows[e.rowId][field];
@@ -425,6 +439,19 @@ export const useStore = create<State>((set, get) => {
       get().applyEdits(edits);
     },
 
+    applySentToActive() {
+      const a = get().active;
+      if (!a) return;
+      const { cells } = get();
+      const targets: { rowId: string; col: ColKey }[] = [];
+      for (const rowId of a.rowIds)
+        for (const col of a.colKeys) if (isDayCol(col)) targets.push({ rowId, col });
+      if (!targets.length) return;
+      const allSent = targets.every(({ rowId, col }) => cells.get(cellKey(rowId, colDay(col)))?.sent);
+      const sent = !allSent;
+      get().applyEdits(targets.map((t) => ({ ...t, sent })));
+    },
+
     mergeActive() {
       const a = get().active;
       if (!a) return;
@@ -447,7 +474,7 @@ export const useStore = create<State>((set, get) => {
         for (const day of spanDays.slice(1)) {
           const cell = cells.get(cellKey(rowId, day));
           if (cell?.value) losesText = true;
-          if (cell) edits.push({ rowId, col: dayCol(day), value: "", bg: null, fg: null, comment: "", span: 1 });
+          if (cell) edits.push({ rowId, col: dayCol(day), value: "", bg: null, fg: null, comment: "", span: 1, sent: false });
         }
         edits.push({
           rowId,
@@ -457,6 +484,7 @@ export const useStore = create<State>((set, get) => {
           fg: anchor.fg,
           comment: anchor.comment,
           span: spanDays.length,
+          sent: !!anchor.sent,
         });
       }
       if (losesText && !confirm("Объединить ячейки? Останется только текст левой ячейки в каждой строке.")) return;
