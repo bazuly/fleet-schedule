@@ -1,5 +1,17 @@
 export const API_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080").replace(/\/$/, "");
 
+/**
+ * С localhost API по-прежнему на порту 8080.
+ * С любого другого адреса (ngrok, телефон) запросы идут на тот же хост, что и страница,
+ * а Next проксирует /api на бэкенд. Иначе https-страница зависает на http://localhost:8080.
+ */
+export function apiBase(): string {
+  if (typeof window === "undefined") return API_URL;
+  const host = window.location.hostname;
+  if (host === "localhost" || host === "127.0.0.1" || host === "[::1]") return API_URL;
+  return window.location.origin;
+}
+
 export type Panel = "main" | "unassigned" | "pickups";
 
 export interface User {
@@ -93,7 +105,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   if (token) headers.authorization = `Bearer ${token}`;
   if (body !== undefined) headers["content-type"] = "application/json";
 
-  const res = await fetch(`${API_URL}/api${path}`, {
+  const res = await fetch(`${apiBase()}/api${path}`, {
     method,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -166,5 +178,5 @@ export interface Located {
 }
 
 export function wsUrl(): string {
-  return `${API_URL.replace(/^http/, "ws")}/api/ws?token=${encodeURIComponent(tokenStore.get() ?? "")}`;
+  return `${apiBase().replace(/^http/, "ws")}/api/ws?token=${encodeURIComponent(tokenStore.get() ?? "")}`;
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, tokenStore } from "@/lib/api";
 import { connectRealtime } from "@/lib/realtime";
 import { useStore } from "@/lib/store";
@@ -36,6 +36,7 @@ interface WindowsState {
 }
 
 const WINDOWS_KEY = "fleet.windows";
+const NAMES_KEY = "fleet.namesCollapsed";
 const MAPS_KEY = "fleet.mapWindows";
 const OPEN_MAPS_KEY = "fleet.openMaps";
 
@@ -115,6 +116,25 @@ export default function Workspace() {
   }, []);
   const toast = useStore((s) => s.toast);
   const loading = useStore((s) => s.loading);
+  const [narrow, setNarrow] = useState(false);
+  const [namesCollapsed, setNamesCollapsed] = useState(false);
+
+  useLayoutEffect(() => {
+    setNamesCollapsed(localStorage.getItem(NAMES_KEY) === "1");
+    const mq = window.matchMedia("(max-width: 720px)");
+    const apply = () => setNarrow(mq.matches);
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
+
+  const toggleNames = useCallback(() => {
+    setNamesCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem(NAMES_KEY, next ? "1" : "0");
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (!tokenStore.get()) {
@@ -203,10 +223,15 @@ export default function Workspace() {
 
   return (
     <div className={styles.workspace}>
-      <Toolbar visible={windows.visible} onToggle={toggle} />
+      <Toolbar
+        visible={windows.visible}
+        onToggle={toggle}
+        namesCollapsed={namesCollapsed}
+        onToggleNames={toggleNames}
+      />
       <FormulaBar />
       <div className={styles.main}>
-        <Grid panel="main" frozen={MAIN_COLUMNS} />
+        <Grid panel="main" frozen={MAIN_COLUMNS} hideFrozen={narrow && namesCollapsed} />
       </div>
 
       {(Object.keys(PANEL_TITLES) as PanelKey[]).map(

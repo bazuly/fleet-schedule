@@ -319,7 +319,15 @@
   background: transparent;
 }
 
+.group button.namesToggle {
+  display: none;
+}
+
 @media (max-width: 720px) {
+  .group button.namesToggle {
+    display: inline-flex;
+  }
+
   .toolbar {
     height: auto;
     flex-wrap: wrap;

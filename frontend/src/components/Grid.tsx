@@ -29,6 +29,8 @@ export interface FrozenCol {
 interface Props {
   panel: Panel;
   frozen: FrozenCol[];
+  /** На узком экране прячет закреплённые столбцы, чтобы дни заняли всю ширину. */
+  hideFrozen?: boolean;
 }
 
 const BASE_CELL = 96;
@@ -52,7 +54,7 @@ function resetScroll(e: React.UIEvent<HTMLElement>) {
   }
 }
 
-export default function Grid({ panel, frozen }: Props) {
+export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
   const rows = useStore((s) => s.rows);
   const cells = useStore((s) => s.cells);
   const range = useStore((s) => s.range);
@@ -77,6 +79,7 @@ export default function Grid({ panel, frozen }: Props) {
   const D = days.length;
   const C = K + D;
   const frozenX = useMemo(() => {
+    if (hideFrozen) return Array.from({ length: frozen.length + 1 }, () => 0);
     const widths = frozen.map((f) => Math.round(f.width * zoom));
     const natural = widths.reduce((sum, w) => sum + w, 0);
     const day = Math.round(BASE_CELL * zoom);
@@ -104,7 +107,7 @@ export default function Grid({ panel, frozen }: Props) {
     const xs = [0];
     for (const w of used) xs.push(xs[xs.length - 1] + Math.max(0, w));
     return xs;
-  }, [frozen, zoom, viewport.w, gutterW]);
+  }, [frozen, zoom, viewport.w, gutterW, hideFrozen]);
   const frozenW = frozenX[K];
   const leftW = gutterW + frozenW;
 
@@ -411,10 +414,25 @@ export default function Grid({ panel, frozen }: Props) {
   const clampPos = useCallback(
     (p: Pos): Pos => ({
       r: Math.max(0, Math.min(N - 1, p.r)),
-      c: Math.max(0, Math.min(C - 1, p.c)),
+      c: Math.max(hideFrozen && K < C ? K : 0, Math.min(C - 1, p.c)),
     }),
-    [N, C],
+    [N, C, hideFrozen, K],
   );
+
+  // В момент сворачивания уводим выделение с фамилий на день, чтобы строка формул не смотрела в пустоту.
+  const wasHiddenRef = useRef(hideFrozen);
+  useEffect(() => {
+    const turnedOn = hideFrozen && !wasHiddenRef.current;
+    wasHiddenRef.current = hideFrozen;
+    if (!turnedOn || C <= K) return;
+    setSel((s) => {
+      if (s.anchor.c >= K && s.focus.c >= K) return s;
+      const day = days.indexOf(today);
+      const c = Math.max(K, Math.min(C - 1, K + (day >= 0 ? day : 0)));
+      return { anchor: { r: s.anchor.r, c }, focus: { r: s.focus.r, c } };
+    });
+    if (editingRef.current && editingRef.current.c < K) setEditing(null);
+  }, [hideFrozen, K, C, days, today, setEditing]);
 
   const isEmpty = useCallback((r: number, c: number) => valueAt(r, c) === "", [valueAt]);
 
@@ -1249,7 +1267,7 @@ export default function Grid({ panel, frozen }: Props) {
       </div>,
     );
     const fill = statusFill(row?.status);
-    frozen.forEach((f, i) => {
+    if (!hideFrozen) frozen.forEach((f, i) => {
       const v = row?.[f.field] ?? "";
       const colored = fill && (f.field === "driver" || f.field === "tractor" || f.field === "trailer");
       leftCells.push(
@@ -1377,15 +1395,16 @@ export default function Grid({ panel, frozen }: Props) {
 
       <div className={styles.corner} style={{ width: leftW, height: headerH }}>
         <div className={styles.gutterHeader} style={{ width: gutterW }} />
-        {frozen.map((f, i) => (
-          <div
-            key={f.field}
-            className={`${styles.frozenHeader} ${i >= bounds.c0 && i <= bounds.c1 ? styles.headerSelected : ""}`}
-            style={{ left: gutterW + frozenX[i], width: frozenX[i + 1] - frozenX[i] }}
-          >
-            {f.title}
-          </div>
-        ))}
+        {!hideFrozen &&
+          frozen.map((f, i) => (
+            <div
+              key={f.field}
+              className={`${styles.frozenHeader} ${i >= bounds.c0 && i <= bounds.c1 ? styles.headerSelected : ""}`}
+              style={{ left: gutterW + frozenX[i], width: frozenX[i + 1] - frozenX[i] }}
+            >
+              {f.title}
+            </div>
+          ))}
       </div>
 
       <div className={styles.header} style={{ left: leftW, height: headerH }} onScroll={resetScroll}>
@@ -1402,18 +1421,20 @@ export default function Grid({ panel, frozen }: Props) {
       >
         <div style={{ transform: `translateY(${-scroll.top}px)`, position: "relative", height: contentH }}>
           {leftCells}
-          <button
-            className={styles.addRow}
-            style={{ top: N * rowH, width: leftW }}
-            onClick={() => void useStore.getState().addRow(panel)}
-          >
-            + Добавить строку
-          </button>
+          {!hideFrozen && (
+            <button
+              className={styles.addRow}
+              style={{ top: N * rowH, width: leftW }}
+              onClick={() => void useStore.getState().addRow(panel)}
+            >
+              + Добавить строку
+            </button>
+          )}
           {selR && overlay(selR.frozenRect, `${styles.selRange} ${multi && !soleBlock ? "" : styles.selSingle}`, "sf")}
           {activeR && overlay(activeR.frozenRect, styles.selActive, "af")}
           {cutR && overlay(cutR.frozenRect, styles.cutRect, "cf")}
           {fillR && overlay(fillR.frozenRect, styles.fillPreview, "ff")}
-          {editing && editing.c < K && editorNode}
+          {editing && editing.c < K && !hideFrozen && editorNode}
         </div>
       </div>
 
@@ -1429,6 +1450,15 @@ export default function Grid({ panel, frozen }: Props) {
         >
           {columnDecor}
           {bodyCells}
+          {hideFrozen && (
+            <button
+              className={styles.addRow}
+              style={{ top: N * rowH, width: "auto", zIndex: 1 }}
+              onClick={() => void useStore.getState().addRow(panel)}
+            >
+              + Добавить строку
+            </button>
+          )}
           {selR && overlay(selR.bodyRect, `${styles.selRange} ${multi && !soleBlock ? "" : styles.selSingle}`, "sb")}
           {activeR && overlay(activeR.bodyRect, styles.selActive, "ab")}
           {cutR && overlay(cutR.bodyRect, styles.cutRect, "cb")}
