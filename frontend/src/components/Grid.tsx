@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import type { Panel, RowField } from "@/lib/api";
 import { parseTsv, toHtmlTable, toTsv } from "@/lib/clipboard";
 import { daysBetween, formatDayHeader, isFirstOfMonth, todayIso } from "@/lib/dates";
@@ -19,6 +20,19 @@ import CellHistory from "./CellHistory";
 import CommentBox from "./CommentBox";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import styles from "./Grid.module.css";
+
+function isApp(): boolean {
+  return typeof document !== "undefined" && document.documentElement.dataset.app === "1";
+}
+
+/** После долгого нажатия браузер ещё шлёт «отпускание» как клик. Его нельзя считать выбором пункта меню. */
+function suppressGhostClick() {
+  document.documentElement.dataset.fleetSuppressClick = String(Date.now() + 450);
+}
+
+function ghostClick(): boolean {
+  return Date.now() < Number(document.documentElement.dataset.fleetSuppressClick || 0);
+}
 
 export interface FrozenCol {
   field: RowField;
@@ -129,6 +143,10 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
   const [scroll, setScroll] = useState({ top: 0, left: 0 });
   const [drag, setDrag] = useState<Drag | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; r: number; c: number } | null>(null);
+  const pressRef = useRef<{ timer: number; x: number; y: number } | null>(null);
+  const touchMenuRef = useRef(false);
+  const endPressRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => endPressRef.current?.(), []);
   const [noteEdit, setNoteEdit] = useState<{ r: number; c: number; x: number; y: number } | null>(null);
   const [history, setHistory] = useState<{ x: number; y: number; rowId: string; day: string } | null>(null);
   const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null);
@@ -361,6 +379,11 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
   const focusSink = useCallback(() => {
     const s = sinkRef.current;
     if (!s) return;
+    // На телефоне фокус в поле ввода сразу открывает клавиатуру. Фокус остаётся на таблице.
+    if (isApp()) {
+      rootRef.current?.focus({ preventScroll: true });
+      return;
+    }
     s.value = " ";
     s.focus({ preventScroll: true });
     s.select();
@@ -732,6 +755,11 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
   );
 
   const onMouseDown = (e: React.MouseEvent) => {
+    if (isApp() && ghostClick()) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (e.button !== 0 && e.button !== 2) return;
     const target = e.target as HTMLElement;
     if (target === bodyRef.current) return; // клик по полосе прокрутки
@@ -740,6 +768,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
 
     if (editingRef.current) commitEdit();
     e.preventDefault();
+    if (isApp()) setFocused(true);
     focusSink();
 
     const hit = hitTest(e.clientX, e.clientY);
@@ -806,7 +835,56 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
     };
   }, [drag, hitTest, clampPos, applyFill]);
 
+  const cancelPress = () => {
+    if (!pressRef.current) return;
+    window.clearTimeout(pressRef.current.timer);
+    pressRef.current = null;
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (!isApp() || e.pointerType === "mouse") return;
+    if ((e.target as HTMLElement).closest("textarea, button, [data-no-grid]")) return;
+    endPressRef.current?.();
+    cancelPress();
+    const x = e.clientX;
+    const y = e.clientY;
+    const timer = window.setTimeout(() => {
+      pressRef.current = null;
+      touchMenuRef.current = true;
+      const hit = hitTest(x, y);
+      if (hit.r >= 0 && hit.c >= 0 && hit.r < N) {
+        const p = clampPos(hit);
+        const inside = p.r >= bounds.r0 && p.r <= bounds.r1 && p.c >= bounds.c0 && p.c <= bounds.c1;
+        if (!inside) select(p);
+      }
+      setDrag(null);
+      setMenu({ x, y, r: hit.r, c: hit.c });
+    }, 480);
+    pressRef.current = { timer, x, y };
+    const move = (ev: PointerEvent) => {
+      const p = pressRef.current;
+      if (!p) return;
+      if (Math.hypot(ev.clientX - p.x, ev.clientY - p.y) > 12) cancelPress();
+    };
+    const end = () => {
+      cancelPress();
+      if (touchMenuRef.current) {
+        suppressGhostClick();
+        touchMenuRef.current = false;
+      }
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      endPressRef.current = null;
+    };
+    endPressRef.current = end;
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  };
+
   const onDoubleClick = (e: React.MouseEvent) => {
+    if (isApp()) return;
     const target = e.target as HTMLElement;
     if (target.closest("textarea, button, [data-no-grid]")) return;
     const hit = hitTest(e.clientX, e.clientY);
@@ -1059,7 +1137,28 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
   const clickedField = menu && menu.c >= 0 && menu.c < K ? frozen[menu.c].field : null;
   const canSetStatus =
     !!mapRow && (clickedField === "driver" || clickedField === "tractor" || clickedField === "trailer");
+  const canEditCell = !!menu && menu.r >= 0 && menu.c >= 0 && menu.r < N && menu.c < C;
+  const editPressedCell = () => {
+    if (!menu || !canEditCell) return;
+    const p = clampPos({ r: menu.r, c: menu.c });
+    const c = blockAt(p.r, p.c).c0;
+    flushSync(() => {
+      setEditing({ r: p.r, c, mode: "full", value: valueAt(p.r, c) });
+      select({ r: p.r, c });
+    });
+    const el = editorRef.current;
+    if (!el) return;
+    el.focus({ preventScroll: true });
+    const end = el.value.length;
+    el.setSelectionRange(end, end);
+  };
   const menuItems: MenuItem[] = [
+    ...(isApp()
+      ? [
+          { label: "Редактировать", disabled: !canEditCell, onClick: editPressedCell } satisfies MenuItem,
+          { separator: true } satisfies MenuItem,
+        ]
+      : []),
     ...(hasVehicleCols
       ? [
           { label: "Показать на карте", disabled: !mapUnits.length, onClick: showOnMap } satisfies MenuItem,
@@ -1366,15 +1465,21 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
   return (
     <div
       ref={rootRef}
+      tabIndex={-1}
       className={`${styles.root} ${focused ? styles.focused : ""}`}
       style={{ fontSize: scaled(13) }}
       onScroll={resetScroll}
       onMouseDown={onMouseDown}
+      onPointerDown={onPointerDown}
       onDoubleClick={onDoubleClick}
       onContextMenu={(e) => {
         if ((e.target as HTMLElement).closest("textarea, [data-no-grid]") || N === 0) return;
         e.preventDefault();
         const hit = hitTest(e.clientX, e.clientY);
+        if (isApp()) {
+          touchMenuRef.current = true;
+          suppressGhostClick();
+        }
         setMenu({ x: e.clientX, y: e.clientY, r: hit.r, c: hit.c });
       }}
       onFocus={() => setFocused(true)}
@@ -1386,6 +1491,8 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
         ref={sinkRef}
         className={styles.sink}
         aria-label="Таблица"
+        readOnly={isApp()}
+        inputMode={isApp() ? "none" : undefined}
         onKeyDown={onKeyDown}
         onCopy={onCopy}
         onCut={onCut}

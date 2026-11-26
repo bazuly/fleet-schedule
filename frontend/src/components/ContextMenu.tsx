@@ -39,6 +39,7 @@ export default function ContextMenu({ x, y, items, onClose }: Props) {
 
   useEffect(() => {
     const close = (e: MouseEvent) => {
+      if (Date.now() < Number(document.documentElement.dataset.fleetSuppressClick || 0)) return;
       if (!ref.current?.contains(e.target as Node)) onClose();
     };
     const esc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -59,6 +60,12 @@ export default function ContextMenu({ x, y, items, onClose }: Props) {
       className={styles.menu}
       style={{ left: pos.x, top: pos.y }}
       onMouseDown={(e) => e.stopPropagation()}
+      onClickCapture={(e) => {
+        if (Date.now() < Number(document.documentElement.dataset.fleetSuppressClick || 0)) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
       onContextMenu={(e) => e.preventDefault()}
     >
       <MenuList items={items} onClose={onClose} />
@@ -90,6 +97,7 @@ function ActionButton({
       className={`${styles.item} ${item.danger ? styles.danger : ""}`}
       disabled={item.disabled}
       onClick={() => {
+        if (Date.now() < Number(document.documentElement.dataset.fleetSuppressClick || 0)) return;
         if (!item.onClick || item.disabled) return;
         onClose();
         item.onClick();

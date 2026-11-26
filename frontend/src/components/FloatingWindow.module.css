@@ -86,17 +86,17 @@
 }
 
 :global(html[data-app]) .buttons {
-  gap: 6px;
+  gap: 4px;
 }
 
 :global(html[data-app]) .buttons button {
-  width: 48px;
-  height: 48px;
+  width: 29px;
+  height: 29px;
   border: 1px solid var(--line-strong);
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--surface);
   color: var(--text);
-  font-size: 22px;
+  font-size: 13px;
   line-height: 1;
 }
 

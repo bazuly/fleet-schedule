@@ -56,6 +56,12 @@
   right: calc(100% - 4px);
 }
 
+:global(html[data-app]) .item {
+  min-height: 44px;
+  padding: 10px 16px;
+  font-size: 16px;
+}
+
 .item:hover:not(:disabled) {
   background: var(--hover-2);
 }
