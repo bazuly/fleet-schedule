@@ -9,8 +9,9 @@ import styles from "../forms.module.css";
 export default function UsersPage() {
   const [me, setMe] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
-  const [form, setForm] = useState({ login: "", name: "", password: "", is_admin: false });
+  const [form, setForm] = useState({ login: "", name: "", password: "" });
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const reload = async () => setUsers(await api.users());
 
@@ -29,12 +30,15 @@ export default function UsersPage() {
   const create = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setBusy(true);
     try {
-      await api.createUser(form);
-      setForm({ login: "", name: "", password: "", is_admin: false });
+      await api.createUser({ ...form, is_admin: false });
+      setForm({ login: "", name: "", password: "" });
       await reload();
     } catch (err) {
       setError((err as Error).message);
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -80,6 +84,38 @@ export default function UsersPage() {
           </div>
         </div>
 
+        <form className={styles.create} onSubmit={create}>
+          <label>
+            Логин
+            <input
+              value={form.login}
+              autoComplete="off"
+              onChange={(e) => setForm({ ...form, login: e.target.value })}
+            />
+          </label>
+          <label>
+            Имя
+            <input
+              value={form.name}
+              autoComplete="off"
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+            />
+          </label>
+          <label>
+            Пароль
+            <input
+              type="password"
+              value={form.password}
+              autoComplete="new-password"
+              onChange={(e) => setForm({ ...form, password: e.target.value })}
+            />
+          </label>
+          <button className={styles.primary} disabled={busy || !form.login.trim() || form.password.length < 6}>
+            Добавить
+          </button>
+        </form>
+        <div className={styles.hint}>Пароль не короче 6 символов. Новый пользователь сразу может входить.</div>
+
         <table className={styles.table}>
           <thead>
             <tr>
@@ -107,28 +143,6 @@ export default function UsersPage() {
             ))}
           </tbody>
         </table>
-
-        <form className={styles.inline} onSubmit={create}>
-          <input placeholder="Логин" value={form.login} onChange={(e) => setForm({ ...form, login: e.target.value })} />
-          <input placeholder="Имя" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          <input
-            placeholder="Пароль"
-            type="password"
-            value={form.password}
-            onChange={(e) => setForm({ ...form, password: e.target.value })}
-          />
-          <label className={styles.checkbox}>
-            <input
-              type="checkbox"
-              checked={form.is_admin}
-              onChange={(e) => setForm({ ...form, is_admin: e.target.checked })}
-            />
-            админ
-          </label>
-          <button className={styles.primary} disabled={!form.login || form.password.length < 6}>
-            Добавить
-          </button>
-        </form>
         {error && <div className={styles.error}>{error}</div>}
       </div>
     </div>

@@ -217,6 +217,19 @@ export default function Workspace() {
     bringToFront(p);
   };
 
+  const showPanel = useCallback(
+    (p: PanelKey) => {
+      setMapOnTop(false);
+      updateWindows((w) => ({
+        ...w,
+        visible: { ...w.visible, [p]: true },
+        geometry: { ...w.geometry, [p]: { ...w.geometry[p], collapsed: false } },
+        order: w.order[w.order.length - 1] === p ? w.order : [...w.order.filter((x) => x !== p), p],
+      }));
+    },
+    [updateWindows],
+  );
+
   if (!ready) {
     return <div className={styles.splash}>{loading ? "Загрузка…" : ""}</div>;
   }
@@ -226,6 +239,7 @@ export default function Workspace() {
       <Toolbar
         visible={windows.visible}
         onToggle={toggle}
+        onShow={showPanel}
         namesCollapsed={namesCollapsed}
         onToggleNames={toggleNames}
       />

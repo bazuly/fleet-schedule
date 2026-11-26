@@ -30,9 +30,10 @@
 }
 
 :global(html[data-app]) .unit {
-  min-height: 44px;
-  padding: 8px 12px;
-  font-size: 14px;
+  min-height: 22px;
+  padding: 2px 8px;
+  gap: 4px;
+  font-size: 12px;
 }
 
 :global(html[data-app]) .map :global(.leaflet-control-zoom a) {

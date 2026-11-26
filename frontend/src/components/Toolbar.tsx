@@ -33,6 +33,7 @@ declare global {
 interface Props {
   visible: Record<PanelKey, boolean>;
   onToggle(panel: PanelKey): void;
+  onShow(panel: PanelKey): void;
   namesCollapsed: boolean;
   onToggleNames(): void;
 }
@@ -47,7 +48,7 @@ function placeMenu(rect: DOMRect, menuW: number) {
   };
 }
 
-export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNames }: Props) {
+export default function Toolbar({ visible, onToggle, onShow, namesCollapsed, onToggleNames }: Props) {
   const router = useRouter();
   const user = useStore((s) => s.user);
   const range = useStore((s) => s.range);
@@ -135,8 +136,7 @@ export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNam
 
   return (
     <div className={styles.toolbar}>
-      {(pending.length > 0 || calls.length > 0) && (
-        <div className={styles.group}>
+      <div className={`${styles.group} ${styles.leadGroup}`}>
           {pending.length > 0 && (
             <div className={styles.bellWrap} ref={bellRef}>
               <button
@@ -165,7 +165,7 @@ export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNam
                   today={today}
                   box={bellBox}
                   visible={visible}
-                  onToggle={onToggle}
+                  onShow={onShow}
                   onClose={() => setBellOpen(false)}
                 />
               )}
@@ -200,8 +200,20 @@ export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNam
               )}
             </div>
           )}
+          <button
+            onMouseDown={keepFocus}
+            className={`${styles.namesToggle} ${namesCollapsed ? "" : styles.toggleOn}`}
+            aria-pressed={!namesCollapsed}
+            title={
+              namesCollapsed
+                ? "Показать столбцы водителей и машин"
+                : "Свернуть столбцы водителей и машин"
+            }
+            onClick={onToggleNames}
+          >
+            Водители
+          </button>
         </div>
-      )}
       <div className={styles.group}>
         <button onMouseDown={keepFocus} disabled={!canUndo} onClick={() => useStore.getState().undo()} title="Отменить (⌘Z)">
           ↶
@@ -304,19 +316,6 @@ export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNam
       </div>
 
       <div className={styles.group}>
-        <button
-          onMouseDown={keepFocus}
-          className={`${styles.namesToggle} ${namesCollapsed ? "" : styles.toggleOn}`}
-          aria-pressed={!namesCollapsed}
-          title={
-            namesCollapsed
-              ? "Показать столбцы водителей и машин"
-              : "Свернуть столбцы водителей и машин"
-          }
-          onClick={onToggleNames}
-        >
-          Водители
-        </button>
         <RangeInputs key={`${range.from}|${range.to}`} from={range.from} to={range.to} />
         <button onMouseDown={keepFocus} onClick={() => scrollBus.scrollToDay(todayIso())}>
           Сегодня
@@ -458,25 +457,24 @@ function PendingMenu({
   today,
   box,
   visible,
-  onToggle,
+  onShow,
   onClose,
 }: {
   tasks: PendingTask[];
   today: string;
   box: { left: number; top: number };
   visible: Record<PanelKey, boolean>;
-  onToggle(panel: PanelKey): void;
+  onShow(panel: PanelKey): void;
   onClose(): void;
 }) {
   const [showOlder, setShowOlder] = useState(false);
   const open = (task: PendingTask) => {
-    const day = task.days[0];
-    if (!visible[task.panel]) {
-      onToggle(task.panel);
-      setTimeout(() => scrollBus.scrollToDay(day), 80);
-    } else {
-      scrollBus.scrollToDay(day);
-    }
+    const target = { panel: task.panel, rowId: task.rowId, day: task.anchor };
+    const ready = visible[task.panel];
+    onShow(task.panel);
+    // Таблица уже на экране — выделяем сразу. Если окно было закрыто, оно появится следом.
+    if (ready) scrollBus.revealCell(target);
+    setTimeout(() => scrollBus.revealCell(target), 80);
     onClose();
   };
 

@@ -81,7 +81,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
   const todayIdx = days.indexOf(today);
   const zoom = useStore((s) => s.zoom);
   const focusDay = useStore((s) => s.focusDay);
-  const rowH = Math.round(BASE_CELL * zoom);
+  const rowH = Math.round(BASE_CELL * 0.8 * zoom);
   const colW = Math.round(BASE_CELL * zoom);
   const headerH = Math.max(30, Math.round(BASE_HEADER * zoom));
   const gutterW = Math.max(28, Math.round(BASE_GUTTER * zoom));

@@ -323,6 +323,18 @@
   display: none;
 }
 
+/* На широком сайте без приложения пустая группа с кнопкой «Водители» не должна сдвигать шапку. */
+@media (min-width: 721px) {
+  :global(html:not([data-app])) .toolbar > .leadGroup:not(:has(.bellWrap)) {
+    display: none;
+  }
+
+  :global(html:not([data-app])) .toolbar > .leadGroup:not(:has(.bellWrap)) + .group {
+    border-left: 0;
+    padding-left: 0;
+  }
+}
+
 /* Приложение берёт десктопную шапку: одна строка, лишнее уезжает вбок, кнопки не сжимаются. */
 :global(html[data-app]) .group button.namesToggle {
   display: inline-flex;

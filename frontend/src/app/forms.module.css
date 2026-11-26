@@ -151,6 +151,19 @@
   color: var(--danger);
 }
 
+.create {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr auto;
+  gap: 8px 10px;
+  align-items: end;
+}
+
+.hint {
+  margin-top: -6px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
 .inline {
   display: flex;
   gap: 8px;
@@ -164,33 +177,37 @@
 }
 
 @media (max-width: 720px) {
+  .create {
+    grid-template-columns: 1fr;
+  }
+
   :global(html:not([data-app])) .inline input:not([type="checkbox"]) {
     flex: 1 1 100%;
   }
 
-  :global(html:not([data-app])) .table,
-  :global(html:not([data-app])) .table tbody,
-  :global(html:not([data-app])) .table tr,
-  :global(html:not([data-app])) .table td {
+  .table,
+  .table tbody,
+  .table tr,
+  .table td {
     display: block;
     width: 100%;
   }
 
-  :global(html:not([data-app])) .table thead {
+  .table thead {
     display: none;
   }
 
-  :global(html:not([data-app])) .table tr {
+  .table tr {
     padding: 8px 0;
     border-bottom: 1px solid var(--line-soft);
   }
 
-  :global(html:not([data-app])) .table td {
+  .table td {
     border: 0;
     padding: 2px 0;
   }
 
-  :global(html:not([data-app])) .actions {
+  .actions {
     justify-content: flex-start;
     margin-top: 6px;
   }
