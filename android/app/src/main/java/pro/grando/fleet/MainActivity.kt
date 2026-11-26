@@ -52,6 +52,10 @@ class MainActivity : Activity() {
         web.settings.setSupportZoom(false)
         web.settings.builtInZoomControls = false
         web.settings.displayZoomControls = false
+        // Иначе WebView держит буквы не меньше 8px, и при отдалении подпись не влезает в клетку.
+        web.settings.textZoom = 100
+        web.settings.minimumFontSize = 1
+        web.settings.minimumLogicalFontSize = 1
         web.settings.mediaPlaybackRequiresUserGesture = true
         web.settings.allowFileAccess = false
         // В User-Agent нет «Mozilla»: иначе ngrok отдаёт страницу-предупреждение вместо CSS и скриптов.

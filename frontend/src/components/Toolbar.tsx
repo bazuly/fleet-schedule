@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, tokenStore } from "@/lib/api";
 import { todayIso } from "@/lib/dates";
 import { isRecentOverdue, pendingDayLabel, pendingTasks, type PendingTask } from "@/lib/pending";
 import { isNotifiedColor, unnotifiedLabel, unnotifiedTrips, type UnnotifiedTrip } from "@/lib/unnotified";
-import { cellKey, colDay, isDayCol, scrollBus, useStore, ZOOMS } from "@/lib/store";
+import { cellKey, colDay, isDayCol, MOBILE_ZOOM, scrollBus, useStore, ZOOM_MAX, ZOOM_MIN, ZOOMS } from "@/lib/store";
 import ThemeButton from "./ThemeButton";
 import styles from "./Toolbar.module.css";
 
@@ -58,7 +58,7 @@ export default function Toolbar({ visible, onToggle, onShow, namesCollapsed, onT
   const canUndo = useStore((s) => s.undoStack.length > 0);
   const canRedo = useStore((s) => s.redoStack.length > 0);
   const syncScroll = useStore((s) => s.syncScroll);
-  const zoom = useStore((s) => s.zoom);
+  const zoom = useStore((s) => s.zoomPreview ?? s.zoom);
   const [zoomMenu, setZoomMenu] = useState<{ x: number; y: number } | null>(null);
   const zoomBtnRef = useRef<HTMLButtonElement>(null);
   const [palette, setPalette] = useState<{ x: number; y: number } | null>(null);
@@ -107,10 +107,20 @@ export default function Toolbar({ visible, onToggle, onShow, namesCollapsed, onT
     setPalette(rect ? placeMenu(rect, 188) : { x: 8, y: 0 });
   };
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setInApp(typeof window.FleetApp?.openSetup === "function");
-    const saved = Number(localStorage.getItem("fleet.zoom"));
-    if (ZOOMS.includes(saved)) useStore.getState().setZoom(saved);
+    const raw = localStorage.getItem("fleet.zoom");
+    const saved = Number(raw);
+    if (raw !== null && Number.isFinite(saved) && saved >= ZOOM_MIN && saved <= ZOOM_MAX) {
+      useStore.getState().setZoom(saved);
+      return;
+    }
+    const mobile =
+      document.documentElement.dataset.app === "1" || window.matchMedia("(max-width: 720px)").matches;
+    if (mobile) useStore.getState().setZoom(MOBILE_ZOOM);
+  }, []);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
       if ((e.target as HTMLElement | null)?.closest("input, textarea")) return;
@@ -122,7 +132,9 @@ export default function Toolbar({ visible, onToggle, onShow, namesCollapsed, onT
         useStore.getState().stepZoom(-1);
       } else if (e.key === "0") {
         e.preventDefault();
-        useStore.getState().setZoom(1);
+        const mobile =
+          document.documentElement.dataset.app === "1" || window.matchMedia("(max-width: 720px)").matches;
+        useStore.getState().setZoom(mobile ? MOBILE_ZOOM : 1);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -373,7 +385,7 @@ export default function Toolbar({ visible, onToggle, onShow, namesCollapsed, onT
             {ZOOMS.map((z) => (
               <button
                 key={z}
-                className={z === zoom ? styles.toggleOn : ""}
+                className={Math.abs(z - zoom) < 0.001 ? styles.toggleOn : ""}
                 onClick={() => {
                   useStore.getState().setZoom(z);
                   setZoomMenu(null);

@@ -13,6 +13,8 @@ import {
   scrollBus,
   sortedRowIds,
   useStore,
+  ZOOM_MAX,
+  ZOOM_MIN,
   type ColKey,
   type Edit,
 } from "@/lib/store";
@@ -23,6 +25,12 @@ import styles from "./Grid.module.css";
 
 function isApp(): boolean {
   return typeof document !== "undefined" && document.documentElement.dataset.app === "1";
+}
+
+/** Узкий экран и приложение: размер букв не зависит от масштаба. */
+function isMobileSheet(): boolean {
+  if (typeof document === "undefined") return false;
+  return isApp() || window.matchMedia("(max-width: 720px)").matches;
 }
 
 /** После долгого нажатия браузер ещё шлёт «отпускание» как клик. Его нельзя считать выбором пункта меню. */
@@ -47,6 +55,8 @@ interface Props {
   hideFrozen?: boolean;
 }
 
+/** В мобильной версии буквы не растут и не сжимаются вместе с масштабом. */
+const MOBILE_FONT = 5;
 const BASE_CELL = 96;
 const BASE_HEADER = 40;
 const BASE_GUTTER = 38;
@@ -86,6 +96,16 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
   const headerH = Math.max(30, Math.round(BASE_HEADER * zoom));
   const gutterW = Math.max(28, Math.round(BASE_GUTTER * zoom));
   const scaled = (px: number) => Math.round(px * zoom);
+  const [mobileSheet, setMobileSheet] = useState(false);
+  useLayoutEffect(() => {
+    const mq = window.matchMedia("(max-width: 720px)");
+    const apply = () => setMobileSheet(isMobileSheet());
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
+  const fontPx = mobileSheet ? MOBILE_FONT : Math.max(1, Math.round(13 * zoom));
+  const compact = zoom < 0.6;
   const [viewport, setViewport] = useState({ w: 1200, h: 600 });
 
   const K = frozen.length;
@@ -145,6 +165,13 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
   const [menu, setMenu] = useState<{ x: number; y: number; r: number; c: number } | null>(null);
   const pressRef = useRef<{ timer: number; x: number; y: number } | null>(null);
   const touchMenuRef = useRef(false);
+  /** Касание началось на водителях или машинах: это прокрутка плана, а не протягивание выделения. */
+  const namesTouch = useRef(false);
+  /** Жест уже прокрутил план. Следующее «нажатие мыши» от пальца не должно выбирать клетку. */
+  const swallowMouse = useRef(false);
+  /** Прокрутка на момент начала щипка. После жеста из неё считается настоящий масштаб. */
+  const pinchCommit = useRef<{ sl0: number; st0: number; sx: number; sy: number; mx: number; my: number } | null>(null);
+  const pinching = useRef(false);
   const endPressRef = useRef<(() => void) | null>(null);
   useEffect(() => () => endPressRef.current?.(), []);
   const [noteEdit, setNoteEdit] = useState<{ r: number; c: number; x: number; y: number } | null>(null);
@@ -279,7 +306,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
       const day = days[idx];
       if (day) useStore.getState().setFocusDay(day);
     }
-    if (suppressSyncRef.current) {
+    if (suppressSyncRef.current || pinching.current) {
       suppressSyncRef.current = false;
       return;
     }
@@ -320,16 +347,239 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
-  const zoomRef = useRef(zoom);
+  // Пальцы: щипок меняет масштаб картинкой, а настоящий пересчёт — один раз в конце.
+  // Свайп по водителям и машинам двигает план.
   useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    let pinch: {
+      dist: number;
+      zoom: number;
+      sx: number;
+      sy: number;
+      mx: number;
+      my: number;
+      sl0: number;
+      st0: number;
+      scale: number;
+      target: number;
+      originX: number;
+      originY: number;
+    } | null = null;
+    let pan: {
+      x: number;
+      y: number;
+      left: number;
+      top: number;
+      active: boolean;
+      lx: number;
+      ly: number;
+      lt: number;
+      vx: number;
+      vy: number;
+    } | null = null;
+    let fling = 0;
+    const stopFling = () => {
+      if (fling) cancelAnimationFrame(fling);
+      fling = 0;
+    };
+    const fingerDist = (touches: TouchList) => {
+      const dx = touches[0].clientX - touches[1].clientX;
+      const dy = touches[0].clientY - touches[1].clientY;
+      return Math.hypot(dx, dy);
+    };
+    const fingerMid = (touches: TouchList) => ({
+      x: (touches[0].clientX + touches[1].clientX) / 2,
+      y: (touches[0].clientY + touches[1].clientY) / 2,
+    });
+    const dropPress = () => {
+      const press = pressRef.current;
+      if (!press) return;
+      window.clearTimeout(press.timer);
+      pressRef.current = null;
+    };
+    const clearPreview = () => {
+      root.style.transform = "";
+      root.style.transformOrigin = "";
+      root.style.willChange = "";
+    };
+    const quantize = (value: number) =>
+      Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value)) * 1000) / 1000;
+    const showPreview = (p: NonNullable<typeof pinch>) => {
+      p.target = quantize(p.zoom * p.scale);
+      p.scale = p.target / p.zoom;
+      root.style.willChange = "transform";
+      root.style.transformOrigin = "0 0";
+      root.style.transform = `translate(${p.mx}px, ${p.my}px) scale(${p.scale}) translate(${-p.sx}px, ${-p.sy}px)`;
+      useStore.getState().setZoomPreview(p.target);
+    };
+    const finishPinch = () => {
+      const p = pinch;
+      pinch = null;
+      clearPreview();
+      if (!p) return;
+      if (Math.abs(p.target - useStore.getState().zoom) < 0.0005) {
+        useStore.getState().setZoomPreview(null);
+        pinching.current = false;
+        return;
+      }
+      pinchCommit.current = { sl0: p.sl0, st0: p.st0, sx: p.sx, sy: p.sy, mx: p.mx, my: p.my };
+      useStore.getState().setZoom(p.target);
+      requestAnimationFrame(() => {
+        pinching.current = false;
+        const body = bodyRef.current;
+        if (panel === "main" && body && useStore.getState().syncScroll) scrollBus.emit(panel, body.scrollLeft);
+      });
+    };
+    const onStart = (e: TouchEvent) => {
+      stopFling();
+      if (e.touches.length >= 2) {
+        pan = null;
+        namesTouch.current = false;
+        dropPress();
+        setDrag(null);
+        const body = bodyRef.current;
+        if (!body) return;
+        const rect = root.getBoundingClientRect();
+        const m = fingerMid(e.touches);
+        pinch = {
+          dist: Math.max(1, fingerDist(e.touches)),
+          zoom: useStore.getState().zoom,
+          sx: m.x - rect.left,
+          sy: m.y - rect.top,
+          mx: m.x - rect.left,
+          my: m.y - rect.top,
+          sl0: body.scrollLeft,
+          st0: body.scrollTop,
+          scale: 1,
+          target: useStore.getState().zoom,
+          originX: rect.left,
+          originY: rect.top,
+        };
+        pinching.current = true;
+        return;
+      }
+      if (pinch) return;
+      const target = e.target;
+      if (e.touches.length === 1 && target instanceof Element && target.closest("[data-sheet-pan]")) {
+        if (target.closest("button, textarea")) return;
+        const t = e.touches[0];
+        const body = bodyRef.current;
+        if (!body) return;
+        namesTouch.current = true;
+        pan = {
+          x: t.clientX,
+          y: t.clientY,
+          left: body.scrollLeft,
+          top: body.scrollTop,
+          active: false,
+          lx: t.clientX,
+          ly: t.clientY,
+          lt: performance.now(),
+          vx: 0,
+          vy: 0,
+        };
+      }
+    };
+    const onMove = (e: TouchEvent) => {
+      if (e.touches.length >= 2 && pinch) {
+        e.preventDefault();
+        const m = fingerMid(e.touches);
+        pinch.mx = m.x - pinch.originX;
+        pinch.my = m.y - pinch.originY;
+        pinch.scale = fingerDist(e.touches) / pinch.dist;
+        showPreview(pinch);
+        return;
+      }
+      if (e.touches.length !== 1 || !pan) return;
+      const t = e.touches[0];
+      const dx = t.clientX - pan.x;
+      const dy = t.clientY - pan.y;
+      if (!pan.active && Math.hypot(dx, dy) < 8) return;
+      if (!pan.active) {
+        pan.active = true;
+        dropPress();
+        setDrag(null);
+      }
+      e.preventDefault();
+      const now = performance.now();
+      const dt = now - pan.lt;
+      if (dt > 0 && dt < 80) {
+        pan.vx = (t.clientX - pan.lx) / dt;
+        pan.vy = (t.clientY - pan.ly) / dt;
+      }
+      pan.lx = t.clientX;
+      pan.ly = t.clientY;
+      pan.lt = now;
+      const body = bodyRef.current;
+      if (!body) return;
+      body.scrollLeft = pan.left - dx;
+      body.scrollTop = pan.top - dy;
+    };
+    const onEnd = (e: TouchEvent) => {
+      if (pinch && e.touches.length < 2) finishPinch();
+      if (e.touches.length > 0) return;
+      namesTouch.current = false;
+      if (pan?.active) {
+        swallowMouse.current = true;
+        const body = bodyRef.current;
+        let vx = -pan.vx;
+        let vy = -pan.vy;
+        pan = null;
+        if (body && Math.hypot(vx, vy) > 0.05) {
+          const step = () => {
+            vx *= 0.92;
+            vy *= 0.92;
+            body.scrollLeft += vx * 16;
+            body.scrollTop += vy * 16;
+            if (Math.hypot(vx, vy) > 0.04) fling = requestAnimationFrame(step);
+            else fling = 0;
+          };
+          fling = requestAnimationFrame(step);
+        }
+        return;
+      }
+      pan = null;
+    };
+    root.addEventListener("touchstart", onStart, { capture: true, passive: true });
+    root.addEventListener("touchmove", onMove, { capture: true, passive: false });
+    root.addEventListener("touchend", onEnd, { capture: true });
+    root.addEventListener("touchcancel", onEnd, { capture: true });
+    return () => {
+      stopFling();
+      clearPreview();
+      pinching.current = false;
+      useStore.getState().setZoomPreview(null);
+      root.removeEventListener("touchstart", onStart, { capture: true });
+      root.removeEventListener("touchmove", onMove, { capture: true });
+      root.removeEventListener("touchend", onEnd, { capture: true });
+      root.removeEventListener("touchcancel", onEnd, { capture: true });
+    };
+  }, []);
+
+  const zoomRef = useRef(zoom);
+  useLayoutEffect(() => {
     const el = bodyRef.current;
     const prev = zoomRef.current;
     zoomRef.current = zoom;
     if (!el || prev === zoom) return;
     const ratio = zoom / prev;
+    const commit = pinchCommit.current;
+    const root = rootRef.current;
     suppressSyncRef.current = true;
-    el.scrollLeft *= ratio;
-    el.scrollTop *= ratio;
+    if (commit) {
+      pinchCommit.current = null;
+      el.scrollLeft = commit.sl0 * ratio + commit.sx * ratio - commit.mx;
+      el.scrollTop = commit.st0 * ratio + commit.sy * ratio - commit.my;
+      if (root) {
+        root.style.transform = "";
+        root.style.transformOrigin = "";
+        root.style.willChange = "";
+      }
+    } else {
+      el.scrollLeft *= ratio;
+      el.scrollTop *= ratio;
+    }
   }, [zoom]);
 
   const scrollToDay = useCallback(
@@ -795,6 +1045,11 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
       e.stopPropagation();
       return;
     }
+    if (swallowMouse.current) {
+      swallowMouse.current = false;
+      e.preventDefault();
+      return;
+    }
     if (e.button !== 0 && e.button !== 2) return;
     const target = e.target as HTMLElement;
     if (target === bodyRef.current) return; // клик по полосе прокрутки
@@ -834,7 +1089,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
     }
     if (e.shiftKey) setSel((s) => ({ anchor: s.anchor, focus: p }));
     else select(p);
-    setDrag({ kind: "select" });
+    if (!namesTouch.current) setDrag({ kind: "select" });
   };
 
   const onFillHandleDown = (e: React.MouseEvent) => {
@@ -1354,7 +1609,11 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
           {data.value && (
             <span
               className={styles.cellText}
-              style={{ width: span * colW - 5, height: rowH - 5, color: data.fg || (data.bg ? "#202124" : undefined) }}
+              style={{
+                width: Math.max(0, span * colW - (mobileSheet ? 2 : 5)),
+                height: Math.max(0, rowH - (mobileSheet ? 2 : 5)),
+                color: data.fg || (data.bg ? "#202124" : undefined),
+              }}
             >
               <span>{data.value}</span>
             </span>
@@ -1489,11 +1748,18 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
         )
       : Math.max(span * colW, Math.min(scaled(220), Math.max(span * colW, viewport.w - leftW - 12)));
     const lines = editing.value.split("\n").length;
+    const editorFont = mobileSheet ? 16 : Math.max(fontPx, 14);
     editorNode = (
       <textarea
         ref={editorRef}
         className={styles.editor}
-        style={{ left, top: editing.r * rowH, width, height: Math.max(rowH, lines * scaled(18) + 6) }}
+        style={{
+          left,
+          top: editing.r * rowH,
+          width,
+          height: Math.max(rowH, lines * editorFont + 6),
+          fontSize: editorFont,
+        }}
         value={editing.value}
         spellCheck={false}
         onChange={onEditorChange}
@@ -1510,7 +1776,8 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
       ref={rootRef}
       tabIndex={-1}
       className={`${styles.root} ${focused ? styles.focused : ""}`}
-      style={{ fontSize: scaled(13) }}
+      data-compact={compact ? "" : undefined}
+      style={{ fontSize: fontPx }}
       onScroll={resetScroll}
       onMouseDown={onMouseDown}
       onPointerDown={onPointerDown}
@@ -1543,7 +1810,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
         onChange={() => {}}
       />
 
-      <div className={styles.corner} style={{ width: leftW, height: headerH }}>
+      <div className={styles.corner} data-sheet-pan style={{ width: leftW, height: headerH }}>
         <div className={styles.gutterHeader} style={{ width: gutterW }} />
         {!hideFrozen &&
           frozen.map((f, i) => (
@@ -1565,6 +1832,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
 
       <div
         className={styles.left}
+        data-sheet-pan
         style={{ top: headerH, width: leftW }}
         onWheel={onWheelFrozen}
         onScroll={resetScroll}
