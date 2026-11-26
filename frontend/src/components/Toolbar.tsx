@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, tokenStore } from "@/lib/api";
 import { todayIso } from "@/lib/dates";
 import { isRecentOverdue, pendingDayLabel, pendingTasks, type PendingTask } from "@/lib/pending";
-import { unnotifiedLabel, unnotifiedTrips, type UnnotifiedTrip } from "@/lib/unnotified";
-import { colDay, isDayCol, scrollBus, useStore, ZOOMS } from "@/lib/store";
+import { isNotifiedColor, unnotifiedLabel, unnotifiedTrips, type UnnotifiedTrip } from "@/lib/unnotified";
+import { cellKey, colDay, isDayCol, MOBILE_ZOOM, scrollBus, useStore, ZOOM_MAX, ZOOM_MIN, ZOOMS } from "@/lib/store";
 import ThemeButton from "./ThemeButton";
 import styles from "./Toolbar.module.css";
 
@@ -24,11 +24,20 @@ const FONT_COLORS = [
 
 export type PanelKey = "unassigned" | "pickups";
 
+declare global {
+  interface Window {
+    FleetApp?: { openSetup: () => void };
+  }
+}
+
 interface Props {
   visible: Record<PanelKey, boolean>;
   onToggle(panel: PanelKey): void;
+  onShow(panel: PanelKey): void;
   namesCollapsed: boolean;
   onToggleNames(): void;
+  fleetOpen: boolean;
+  onToggleFleet(): void;
 }
 
 /** Кнопки тулбара не забирают фокус у таблицы, чтобы не терять выделение. */
@@ -41,7 +50,7 @@ function placeMenu(rect: DOMRect, menuW: number) {
   };
 }
 
-export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNames }: Props) {
+export default function Toolbar({ visible, onToggle, onShow, namesCollapsed, onToggleNames, fleetOpen, onToggleFleet }: Props) {
   const router = useRouter();
   const user = useStore((s) => s.user);
   const range = useStore((s) => s.range);
@@ -49,7 +58,7 @@ export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNam
   const canUndo = useStore((s) => s.undoStack.length > 0);
   const canRedo = useStore((s) => s.redoStack.length > 0);
   const syncScroll = useStore((s) => s.syncScroll);
-  const zoom = useStore((s) => s.zoom);
+  const zoom = useStore((s) => s.zoomPreview ?? s.zoom);
   const [zoomMenu, setZoomMenu] = useState<{ x: number; y: number } | null>(null);
   const zoomBtnRef = useRef<HTMLButtonElement>(null);
   const [palette, setPalette] = useState<{ x: number; y: number } | null>(null);
@@ -60,6 +69,7 @@ export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNam
   const [bellBox, setBellBox] = useState<{ left: number; top: number } | null>(null);
   const bellRef = useRef<HTMLDivElement>(null);
   const [phoneOpen, setPhoneOpen] = useState(false);
+  const [inApp, setInApp] = useState(false);
   const [phoneBox, setPhoneBox] = useState<{ left: number; top: number } | null>(null);
   const phoneRef = useRef<HTMLDivElement>(null);
   const rows = useStore((s) => s.rows);
@@ -73,6 +83,23 @@ export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNam
   const dayCols = active?.colKeys.filter(isDayCol).length ?? 0;
   const canMerge = dayCols > 1;
   const canNotify = dayCols > 0;
+  const anchorCell =
+    active && isDayCol(active.anchorCol)
+      ? cells.get(cellKey(active.anchorRowId, colDay(active.anchorCol)))
+      : undefined;
+  const anchorSent = !!anchorCell?.sent;
+  const anchorNotified = isNotifiedColor(anchorCell?.fg);
+  const notifyActive = () => {
+    const state = useStore.getState();
+    const a = state.active;
+    if (!a) return;
+    const targets: { rowId: string; col: string }[] = [];
+    for (const rowId of a.rowIds) for (const col of a.colKeys) if (isDayCol(col)) targets.push({ rowId, col });
+    const allTold =
+      targets.length > 0 &&
+      targets.every(({ rowId, col }) => isNotifiedColor(state.cells.get(cellKey(rowId, colDay(col)))?.fg));
+    state.applyFgToActive(allTold ? "#000000" : "#ffff00");
+  };
   const paletteOpen = palette !== null;
   const setPaletteOpen = (open: boolean) => {
     if (!open) return setPalette(null);
@@ -80,9 +107,20 @@ export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNam
     setPalette(rect ? placeMenu(rect, 188) : { x: 8, y: 0 });
   };
 
+  useLayoutEffect(() => {
+    setInApp(typeof window.FleetApp?.openSetup === "function");
+    const raw = localStorage.getItem("fleet.zoom");
+    const saved = Number(raw);
+    if (raw !== null && Number.isFinite(saved) && saved >= ZOOM_MIN && saved <= ZOOM_MAX) {
+      useStore.getState().setZoom(saved);
+      return;
+    }
+    const mobile =
+      document.documentElement.dataset.app === "1" || window.matchMedia("(max-width: 720px)").matches;
+    if (mobile) useStore.getState().setZoom(MOBILE_ZOOM);
+  }, []);
+
   useEffect(() => {
-    const saved = Number(localStorage.getItem("fleet.zoom"));
-    if (ZOOMS.includes(saved)) useStore.getState().setZoom(saved);
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
       if ((e.target as HTMLElement | null)?.closest("input, textarea")) return;
@@ -94,7 +132,9 @@ export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNam
         useStore.getState().stepZoom(-1);
       } else if (e.key === "0") {
         e.preventDefault();
-        useStore.getState().setZoom(1);
+        const mobile =
+          document.documentElement.dataset.app === "1" || window.matchMedia("(max-width: 720px)").matches;
+        useStore.getState().setZoom(mobile ? MOBILE_ZOOM : 1);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -127,8 +167,7 @@ export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNam
 
   return (
     <div className={styles.toolbar}>
-      {(pending.length > 0 || calls.length > 0) && (
-        <div className={styles.group}>
+      <div className={`${styles.group} ${styles.leadGroup}`}>
           {pending.length > 0 && (
             <div className={styles.bellWrap} ref={bellRef}>
               <button
@@ -157,7 +196,7 @@ export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNam
                   today={today}
                   box={bellBox}
                   visible={visible}
-                  onToggle={onToggle}
+                  onShow={onShow}
                   onClose={() => setBellOpen(false)}
                 />
               )}
@@ -192,8 +231,20 @@ export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNam
               )}
             </div>
           )}
+          <button
+            onMouseDown={keepFocus}
+            className={`${styles.namesToggle} ${namesCollapsed ? "" : styles.toggleOn}`}
+            aria-pressed={!namesCollapsed}
+            title={
+              namesCollapsed
+                ? "Показать столбцы водителей и машин"
+                : "Свернуть столбцы водителей и машин"
+            }
+            onClick={onToggleNames}
+          >
+            Водители
+          </button>
         </div>
-      )}
       <div className={styles.group}>
         <button onMouseDown={keepFocus} disabled={!canUndo} onClick={() => useStore.getState().undo()} title="Отменить (⌘Z)">
           ↶
@@ -277,10 +328,27 @@ export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNam
         <button
           onMouseDown={keepFocus}
           disabled={!canNotify}
-          title="Пометить водителя оповещённым: жёлтый текст"
-          onClick={() => useStore.getState().applyFgToActive("#ffff00")}
+          className={`${styles.markBtn} ${anchorNotified ? styles.toggleOn : ""}`}
+          title="оповещен"
+          aria-label="оповещен"
+          onClick={notifyActive}
         >
-          Оповещен
+          <span aria-hidden>📞</span>
+        </button>
+        <button
+          onMouseDown={keepFocus}
+          disabled={!canNotify}
+          className={`${styles.markBtn} ${anchorSent ? styles.toggleOn : ""}`}
+          title="Данные отправлены"
+          aria-label="Данные отправлены"
+          onClick={() => useStore.getState().applySentToActive()}
+        >
+          <svg className={styles.mailIcon} viewBox="0 0 24 24" aria-hidden="true">
+            <path className={styles.mailSheet} d="M7 3.2h10a1 1 0 0 1 1 1V11H6V4.2a1 1 0 0 1 1-1z" />
+            <path className={styles.mailLine} d="M8.2 5.6h7.6M8.2 7.6h5" />
+            <path className={styles.mailBody} d="M2.2 8.4h19.6v12.2H2.2z" />
+            <path className={styles.mailFlap} d="M2.2 8.4 12 15.6 21.8 8.4" />
+          </svg>
         </button>
       </div>
 
@@ -296,19 +364,6 @@ export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNam
       </div>
 
       <div className={styles.group}>
-        <button
-          onMouseDown={keepFocus}
-          className={`${styles.namesToggle} ${namesCollapsed ? "" : styles.toggleOn}`}
-          aria-pressed={!namesCollapsed}
-          title={
-            namesCollapsed
-              ? "Показать столбцы водителей и машин"
-              : "Свернуть столбцы водителей и машин"
-          }
-          onClick={onToggleNames}
-        >
-          Водители
-        </button>
         <RangeInputs key={`${range.from}|${range.to}`} from={range.from} to={range.to} />
         <button onMouseDown={keepFocus} onClick={() => scrollBus.scrollToDay(todayIso())}>
           Сегодня
@@ -330,7 +385,7 @@ export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNam
             {ZOOMS.map((z) => (
               <button
                 key={z}
-                className={z === zoom ? styles.toggleOn : ""}
+                className={Math.abs(z - zoom) < 0.001 ? styles.toggleOn : ""}
                 onClick={() => {
                   useStore.getState().setZoom(z);
                   setZoomMenu(null);
@@ -358,6 +413,14 @@ export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNam
         >
           Заборы продукции
         </button>
+        <button
+          onMouseDown={keepFocus}
+          className={fleetOpen ? styles.toggleOn : ""}
+          title="Все машины на одной карте. Свободные подсвечены зелёным"
+          onClick={onToggleFleet}
+        >
+          Карта
+        </button>
         <label className={styles.checkbox} title="Окна следуют за прокруткой основного графика. Их собственная прокрутка график не сдвигает">
           <input
             type="checkbox"
@@ -381,6 +444,11 @@ export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNam
           <Link className={styles.link} href="/users">
             Пользователи
           </Link>
+        )}
+        {inApp && (
+          <button onMouseDown={keepFocus} title="Сменить адрес сервера" onClick={() => window.FleetApp?.openSetup()}>
+            Сервер
+          </button>
         )}
         <button onClick={logout}>Выйти</button>
       </div>
@@ -445,25 +513,24 @@ function PendingMenu({
   today,
   box,
   visible,
-  onToggle,
+  onShow,
   onClose,
 }: {
   tasks: PendingTask[];
   today: string;
   box: { left: number; top: number };
   visible: Record<PanelKey, boolean>;
-  onToggle(panel: PanelKey): void;
+  onShow(panel: PanelKey): void;
   onClose(): void;
 }) {
   const [showOlder, setShowOlder] = useState(false);
   const open = (task: PendingTask) => {
-    const day = task.days[0];
-    if (!visible[task.panel]) {
-      onToggle(task.panel);
-      setTimeout(() => scrollBus.scrollToDay(day), 80);
-    } else {
-      scrollBus.scrollToDay(day);
-    }
+    const target = { panel: task.panel, rowId: task.rowId, day: task.anchor };
+    const ready = visible[task.panel];
+    onShow(task.panel);
+    // Таблица уже на экране — выделяем сразу. Если окно было закрыто, оно появится следом.
+    if (ready) scrollBus.revealCell(target);
+    setTimeout(() => scrollBus.revealCell(target), 80);
     onClose();
   };
 
@@ -574,6 +641,11 @@ export function FormulaBar() {
     const who = row.driver || row.tractor || row.note;
     if (who) label = `${who.split("\n")[0]} · ${label}`;
   }
+
+  // Удаление клетки меняет значение снаружи: черновик строки формул не должен вернуть старую надпись.
+  useEffect(() => {
+    setDraftState((prev) => (prev && prev.key === activeKey && prev.value !== value ? null : prev));
+  }, [value, activeKey]);
 
   const commit = () => {
     if (draft === null || !active) return;

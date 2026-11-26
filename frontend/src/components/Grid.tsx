@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import type { Panel, RowField } from "@/lib/api";
 import { parseTsv, toHtmlTable, toTsv } from "@/lib/clipboard";
 import { daysBetween, formatDayHeader, isFirstOfMonth, todayIso } from "@/lib/dates";
@@ -12,6 +13,8 @@ import {
   scrollBus,
   sortedRowIds,
   useStore,
+  ZOOM_MAX,
+  ZOOM_MIN,
   type ColKey,
   type Edit,
 } from "@/lib/store";
@@ -19,6 +22,25 @@ import CellHistory from "./CellHistory";
 import CommentBox from "./CommentBox";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import styles from "./Grid.module.css";
+
+function isApp(): boolean {
+  return typeof document !== "undefined" && document.documentElement.dataset.app === "1";
+}
+
+/** Узкий экран и приложение: размер букв не зависит от масштаба. */
+function isMobileSheet(): boolean {
+  if (typeof document === "undefined") return false;
+  return isApp() || window.matchMedia("(max-width: 720px)").matches;
+}
+
+/** После долгого нажатия браузер ещё шлёт «отпускание» как клик. Его нельзя считать выбором пункта меню. */
+function suppressGhostClick() {
+  document.documentElement.dataset.fleetSuppressClick = String(Date.now() + 450);
+}
+
+function ghostClick(): boolean {
+  return Date.now() < Number(document.documentElement.dataset.fleetSuppressClick || 0);
+}
 
 export interface FrozenCol {
   field: RowField;
@@ -33,6 +55,8 @@ interface Props {
   hideFrozen?: boolean;
 }
 
+/** В мобильной версии буквы не растут и не сжимаются вместе с масштабом. */
+const MOBILE_FONT = 5;
 const BASE_CELL = 96;
 const BASE_HEADER = 40;
 const BASE_GUTTER = 38;
@@ -67,11 +91,21 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
   const todayIdx = days.indexOf(today);
   const zoom = useStore((s) => s.zoom);
   const focusDay = useStore((s) => s.focusDay);
-  const rowH = Math.round(BASE_CELL * zoom);
+  const rowH = Math.round(BASE_CELL * 0.8 * zoom);
   const colW = Math.round(BASE_CELL * zoom);
   const headerH = Math.max(30, Math.round(BASE_HEADER * zoom));
   const gutterW = Math.max(28, Math.round(BASE_GUTTER * zoom));
   const scaled = (px: number) => Math.round(px * zoom);
+  const [mobileSheet, setMobileSheet] = useState(false);
+  useLayoutEffect(() => {
+    const mq = window.matchMedia("(max-width: 720px)");
+    const apply = () => setMobileSheet(isMobileSheet());
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
+  const fontPx = mobileSheet ? MOBILE_FONT : Math.max(1, Math.round(13 * zoom));
+  const compact = zoom < 0.6;
   const [viewport, setViewport] = useState({ w: 1200, h: 600 });
 
   const K = frozen.length;
@@ -129,6 +163,17 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
   const [scroll, setScroll] = useState({ top: 0, left: 0 });
   const [drag, setDrag] = useState<Drag | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; r: number; c: number } | null>(null);
+  const pressRef = useRef<{ timer: number; x: number; y: number } | null>(null);
+  const touchMenuRef = useRef(false);
+  /** Касание началось на водителях или машинах: это прокрутка плана, а не протягивание выделения. */
+  const namesTouch = useRef(false);
+  /** Жест уже прокрутил план. Следующее «нажатие мыши» от пальца не должно выбирать клетку. */
+  const swallowMouse = useRef(false);
+  /** Прокрутка на момент начала щипка. После жеста из неё считается настоящий масштаб. */
+  const pinchCommit = useRef<{ sl0: number; st0: number; sx: number; sy: number; mx: number; my: number } | null>(null);
+  const pinching = useRef(false);
+  const endPressRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => endPressRef.current?.(), []);
   const [noteEdit, setNoteEdit] = useState<{ r: number; c: number; x: number; y: number } | null>(null);
   const [history, setHistory] = useState<{ x: number; y: number; rowId: string; day: string } | null>(null);
   const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null);
@@ -261,7 +306,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
       const day = days[idx];
       if (day) useStore.getState().setFocusDay(day);
     }
-    if (suppressSyncRef.current) {
+    if (suppressSyncRef.current || pinching.current) {
       suppressSyncRef.current = false;
       return;
     }
@@ -302,16 +347,239 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
-  const zoomRef = useRef(zoom);
+  // Пальцы: щипок меняет масштаб картинкой, а настоящий пересчёт — один раз в конце.
+  // Свайп по водителям и машинам двигает план.
   useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    let pinch: {
+      dist: number;
+      zoom: number;
+      sx: number;
+      sy: number;
+      mx: number;
+      my: number;
+      sl0: number;
+      st0: number;
+      scale: number;
+      target: number;
+      originX: number;
+      originY: number;
+    } | null = null;
+    let pan: {
+      x: number;
+      y: number;
+      left: number;
+      top: number;
+      active: boolean;
+      lx: number;
+      ly: number;
+      lt: number;
+      vx: number;
+      vy: number;
+    } | null = null;
+    let fling = 0;
+    const stopFling = () => {
+      if (fling) cancelAnimationFrame(fling);
+      fling = 0;
+    };
+    const fingerDist = (touches: TouchList) => {
+      const dx = touches[0].clientX - touches[1].clientX;
+      const dy = touches[0].clientY - touches[1].clientY;
+      return Math.hypot(dx, dy);
+    };
+    const fingerMid = (touches: TouchList) => ({
+      x: (touches[0].clientX + touches[1].clientX) / 2,
+      y: (touches[0].clientY + touches[1].clientY) / 2,
+    });
+    const dropPress = () => {
+      const press = pressRef.current;
+      if (!press) return;
+      window.clearTimeout(press.timer);
+      pressRef.current = null;
+    };
+    const clearPreview = () => {
+      root.style.transform = "";
+      root.style.transformOrigin = "";
+      root.style.willChange = "";
+    };
+    const quantize = (value: number) =>
+      Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value)) * 1000) / 1000;
+    const showPreview = (p: NonNullable<typeof pinch>) => {
+      p.target = quantize(p.zoom * p.scale);
+      p.scale = p.target / p.zoom;
+      root.style.willChange = "transform";
+      root.style.transformOrigin = "0 0";
+      root.style.transform = `translate(${p.mx}px, ${p.my}px) scale(${p.scale}) translate(${-p.sx}px, ${-p.sy}px)`;
+      useStore.getState().setZoomPreview(p.target);
+    };
+    const finishPinch = () => {
+      const p = pinch;
+      pinch = null;
+      clearPreview();
+      if (!p) return;
+      if (Math.abs(p.target - useStore.getState().zoom) < 0.0005) {
+        useStore.getState().setZoomPreview(null);
+        pinching.current = false;
+        return;
+      }
+      pinchCommit.current = { sl0: p.sl0, st0: p.st0, sx: p.sx, sy: p.sy, mx: p.mx, my: p.my };
+      useStore.getState().setZoom(p.target);
+      requestAnimationFrame(() => {
+        pinching.current = false;
+        const body = bodyRef.current;
+        if (panel === "main" && body && useStore.getState().syncScroll) scrollBus.emit(panel, body.scrollLeft);
+      });
+    };
+    const onStart = (e: TouchEvent) => {
+      stopFling();
+      if (e.touches.length >= 2) {
+        pan = null;
+        namesTouch.current = false;
+        dropPress();
+        setDrag(null);
+        const body = bodyRef.current;
+        if (!body) return;
+        const rect = root.getBoundingClientRect();
+        const m = fingerMid(e.touches);
+        pinch = {
+          dist: Math.max(1, fingerDist(e.touches)),
+          zoom: useStore.getState().zoom,
+          sx: m.x - rect.left,
+          sy: m.y - rect.top,
+          mx: m.x - rect.left,
+          my: m.y - rect.top,
+          sl0: body.scrollLeft,
+          st0: body.scrollTop,
+          scale: 1,
+          target: useStore.getState().zoom,
+          originX: rect.left,
+          originY: rect.top,
+        };
+        pinching.current = true;
+        return;
+      }
+      if (pinch) return;
+      const target = e.target;
+      if (e.touches.length === 1 && target instanceof Element && target.closest("[data-sheet-pan]")) {
+        if (target.closest("button, textarea")) return;
+        const t = e.touches[0];
+        const body = bodyRef.current;
+        if (!body) return;
+        namesTouch.current = true;
+        pan = {
+          x: t.clientX,
+          y: t.clientY,
+          left: body.scrollLeft,
+          top: body.scrollTop,
+          active: false,
+          lx: t.clientX,
+          ly: t.clientY,
+          lt: performance.now(),
+          vx: 0,
+          vy: 0,
+        };
+      }
+    };
+    const onMove = (e: TouchEvent) => {
+      if (e.touches.length >= 2 && pinch) {
+        e.preventDefault();
+        const m = fingerMid(e.touches);
+        pinch.mx = m.x - pinch.originX;
+        pinch.my = m.y - pinch.originY;
+        pinch.scale = fingerDist(e.touches) / pinch.dist;
+        showPreview(pinch);
+        return;
+      }
+      if (e.touches.length !== 1 || !pan) return;
+      const t = e.touches[0];
+      const dx = t.clientX - pan.x;
+      const dy = t.clientY - pan.y;
+      if (!pan.active && Math.hypot(dx, dy) < 8) return;
+      if (!pan.active) {
+        pan.active = true;
+        dropPress();
+        setDrag(null);
+      }
+      e.preventDefault();
+      const now = performance.now();
+      const dt = now - pan.lt;
+      if (dt > 0 && dt < 80) {
+        pan.vx = (t.clientX - pan.lx) / dt;
+        pan.vy = (t.clientY - pan.ly) / dt;
+      }
+      pan.lx = t.clientX;
+      pan.ly = t.clientY;
+      pan.lt = now;
+      const body = bodyRef.current;
+      if (!body) return;
+      body.scrollLeft = pan.left - dx;
+      body.scrollTop = pan.top - dy;
+    };
+    const onEnd = (e: TouchEvent) => {
+      if (pinch && e.touches.length < 2) finishPinch();
+      if (e.touches.length > 0) return;
+      namesTouch.current = false;
+      if (pan?.active) {
+        swallowMouse.current = true;
+        const body = bodyRef.current;
+        let vx = -pan.vx;
+        let vy = -pan.vy;
+        pan = null;
+        if (body && Math.hypot(vx, vy) > 0.05) {
+          const step = () => {
+            vx *= 0.92;
+            vy *= 0.92;
+            body.scrollLeft += vx * 16;
+            body.scrollTop += vy * 16;
+            if (Math.hypot(vx, vy) > 0.04) fling = requestAnimationFrame(step);
+            else fling = 0;
+          };
+          fling = requestAnimationFrame(step);
+        }
+        return;
+      }
+      pan = null;
+    };
+    root.addEventListener("touchstart", onStart, { capture: true, passive: true });
+    root.addEventListener("touchmove", onMove, { capture: true, passive: false });
+    root.addEventListener("touchend", onEnd, { capture: true });
+    root.addEventListener("touchcancel", onEnd, { capture: true });
+    return () => {
+      stopFling();
+      clearPreview();
+      pinching.current = false;
+      useStore.getState().setZoomPreview(null);
+      root.removeEventListener("touchstart", onStart, { capture: true });
+      root.removeEventListener("touchmove", onMove, { capture: true });
+      root.removeEventListener("touchend", onEnd, { capture: true });
+      root.removeEventListener("touchcancel", onEnd, { capture: true });
+    };
+  }, []);
+
+  const zoomRef = useRef(zoom);
+  useLayoutEffect(() => {
     const el = bodyRef.current;
     const prev = zoomRef.current;
     zoomRef.current = zoom;
     if (!el || prev === zoom) return;
     const ratio = zoom / prev;
+    const commit = pinchCommit.current;
+    const root = rootRef.current;
     suppressSyncRef.current = true;
-    el.scrollLeft *= ratio;
-    el.scrollTop *= ratio;
+    if (commit) {
+      pinchCommit.current = null;
+      el.scrollLeft = commit.sl0 * ratio + commit.sx * ratio - commit.mx;
+      el.scrollTop = commit.st0 * ratio + commit.sy * ratio - commit.my;
+      if (root) {
+        root.style.transform = "";
+        root.style.transformOrigin = "";
+        root.style.willChange = "";
+      }
+    } else {
+      el.scrollLeft *= ratio;
+      el.scrollTop *= ratio;
+    }
   }, [zoom]);
 
   const scrollToDay = useCallback(
@@ -361,6 +629,11 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
   const focusSink = useCallback(() => {
     const s = sinkRef.current;
     if (!s) return;
+    // На телефоне фокус в поле ввода сразу открывает клавиатуру. Фокус остаётся на таблице.
+    if (isApp()) {
+      rootRef.current?.focus({ preventScroll: true });
+      return;
+    }
     s.value = " ";
     s.focus({ preventScroll: true });
     s.select();
@@ -522,12 +795,14 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
     const fgs: (string | null)[][] = [];
     const comments: string[][] = [];
     const spans: number[][] = [];
+    const sents: boolean[][] = [];
     for (let r = bounds.r0; r <= bounds.r1; r++) {
       const vr: string[] = [];
       const br: (string | null)[] = [];
       const fr: (string | null)[] = [];
       const cr: string[] = [];
       const sr: number[] = [];
+      const tr: boolean[] = [];
       for (let c = bounds.c0; c <= bounds.c1; c++) {
         const cell = cellAt(r, c);
         const block = blockAt(r, c);
@@ -536,20 +811,22 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
         fr.push(block.c0 === c ? (cell?.fg ?? null) : null);
         cr.push(block.c0 === c ? (cell?.comment ?? "") : "");
         sr.push(block.c0 === c ? block.c1 - block.c0 + 1 : 1);
+        tr.push(block.c0 === c ? !!cell?.sent : false);
       }
       values.push(vr);
       bgs.push(br);
       fgs.push(fr);
       comments.push(cr);
       spans.push(sr);
+      sents.push(tr);
     }
-    return { values, bgs, fgs, comments, spans };
+    return { values, bgs, fgs, comments, spans, sents };
   }, [bounds, valueAt, cellAt, blockAt]);
 
   const doCopy = useCallback(
     (cut: boolean, dt?: DataTransfer | null) => {
       if (N === 0) return;
-      const { values, bgs, fgs, comments, spans } = selectionMatrix();
+      const { values, bgs, fgs, comments, spans, sents } = selectionMatrix();
       const tsv = toTsv(values);
       if (dt) {
         dt.setData("text/plain", tsv);
@@ -566,6 +843,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
         fgs,
         comments,
         spans,
+        sents,
         cut: cut
           ? { gridId: panel, rowIds: rowIds.slice(bounds.r0, bounds.r1 + 1), colKeys: cols }
           : undefined,
@@ -585,6 +863,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
       const fgs = internal ? internal.fgs : null;
       const comments = internal ? internal.comments : null;
       const spans = internal ? internal.spans : null;
+      const sents = internal ? internal.sents : null;
       if (!values.length || !values[0].length) return;
 
       const h = values.length;
@@ -609,6 +888,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
             if (comments && (!single || (r === r0 && c === c0))) edit.comment = comments[sr]?.[sc] ?? "";
             const span = spans?.[sr]?.[sc] ?? 1;
             if (span > 1) edit.span = span;
+            if (sents) edit.sent = !!sents[sr]?.[sc];
           }
           target.set(`${edit.rowId}|${edit.col}`, edit);
         }
@@ -622,7 +902,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
             if (!target.has(k)) {
               edits.push(
                 col.startsWith("d:")
-                  ? { rowId, col, value: "", bg: null, fg: null, comment: "" }
+                  ? { rowId, col, value: "", bg: null, fg: null, comment: "", sent: false }
                   : { rowId, col, value: "" },
               );
             }
@@ -647,6 +927,33 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
     },
     [bounds, rowIds, colKey, applyEdits, K],
   );
+
+  const deleteSelectionCells = useCallback(() => {
+    // Закрываем редактор без сохранения, иначе его текст вернётся в клетку после стирания.
+    setEditing(null);
+    setTip(null);
+    const edits: Edit[] = [];
+    const seen = new Set<string>();
+    const wipeDay = (r: number, c: number) => {
+      if (r < 0 || r >= N || c < K || c >= C) return;
+      const block = blockAt(r, c);
+      const key = `${r}:${block.c0}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const blank = { value: "", bg: null, fg: null, comment: "", span: 1, sent: false };
+      edits.push({ rowId: rowIds[r], col: colKey(block.c0), ...blank });
+      for (let k = block.c0 + 1; k <= block.c1; k++) {
+        if (cellAt(r, k)) edits.push({ rowId: rowIds[r], col: colKey(k), ...blank });
+      }
+    };
+    if (bounds.c1 >= K) {
+      for (let r = bounds.r0; r <= bounds.r1; r++) {
+        for (let c = Math.max(bounds.c0, K); c <= bounds.c1; c++) wipeDay(r, c);
+      }
+    }
+    if (menu) wipeDay(menu.r, menu.c);
+    if (edits.length) applyEdits(edits);
+  }, [bounds, rowIds, colKey, applyEdits, K, C, N, blockAt, cellAt, menu, setEditing]);
 
   // ---------- Автозаполнение маркером ----------
 
@@ -693,6 +1000,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
             const src = cellAt(sr, sc);
             edit.bg = src?.bg ?? null;
             edit.fg = src?.fg ?? null;
+            edit.sent = !!src?.sent;
             edit.span = 1;
           }
           edits.push(edit);
@@ -732,6 +1040,16 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
   );
 
   const onMouseDown = (e: React.MouseEvent) => {
+    if (isApp() && ghostClick()) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (swallowMouse.current) {
+      swallowMouse.current = false;
+      e.preventDefault();
+      return;
+    }
     if (e.button !== 0 && e.button !== 2) return;
     const target = e.target as HTMLElement;
     if (target === bodyRef.current) return; // клик по полосе прокрутки
@@ -740,6 +1058,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
 
     if (editingRef.current) commitEdit();
     e.preventDefault();
+    if (isApp()) setFocused(true);
     focusSink();
 
     const hit = hitTest(e.clientX, e.clientY);
@@ -770,7 +1089,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
     }
     if (e.shiftKey) setSel((s) => ({ anchor: s.anchor, focus: p }));
     else select(p);
-    setDrag({ kind: "select" });
+    if (!namesTouch.current) setDrag({ kind: "select" });
   };
 
   const onFillHandleDown = (e: React.MouseEvent) => {
@@ -806,7 +1125,56 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
     };
   }, [drag, hitTest, clampPos, applyFill]);
 
+  const cancelPress = () => {
+    if (!pressRef.current) return;
+    window.clearTimeout(pressRef.current.timer);
+    pressRef.current = null;
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (!isApp() || e.pointerType === "mouse") return;
+    if ((e.target as HTMLElement).closest("textarea, button, [data-no-grid]")) return;
+    endPressRef.current?.();
+    cancelPress();
+    const x = e.clientX;
+    const y = e.clientY;
+    const timer = window.setTimeout(() => {
+      pressRef.current = null;
+      touchMenuRef.current = true;
+      const hit = hitTest(x, y);
+      if (hit.r >= 0 && hit.c >= 0 && hit.r < N) {
+        const p = clampPos(hit);
+        const inside = p.r >= bounds.r0 && p.r <= bounds.r1 && p.c >= bounds.c0 && p.c <= bounds.c1;
+        if (!inside) select(p);
+      }
+      setDrag(null);
+      setMenu({ x, y, r: hit.r, c: hit.c });
+    }, 480);
+    pressRef.current = { timer, x, y };
+    const move = (ev: PointerEvent) => {
+      const p = pressRef.current;
+      if (!p) return;
+      if (Math.hypot(ev.clientX - p.x, ev.clientY - p.y) > 12) cancelPress();
+    };
+    const end = () => {
+      cancelPress();
+      if (touchMenuRef.current) {
+        suppressGhostClick();
+        touchMenuRef.current = false;
+      }
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      endPressRef.current = null;
+    };
+    endPressRef.current = end;
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  };
+
   const onDoubleClick = (e: React.MouseEvent) => {
+    if (isApp()) return;
     const target = e.target as HTMLElement;
     if (target.closest("textarea, button, [data-no-grid]")) return;
     const hit = hitTest(e.clientX, e.clientY);
@@ -1002,7 +1370,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
       for (let c = c0 + 1; c <= c1; c++) {
         const cell = cellAt(r, c);
         if (cell?.value) losesText = true;
-        if (cell) edits.push({ rowId: rowIds[r], col: colKey(c), value: "", bg: null, fg: null, comment: "", span: 1 });
+        if (cell) edits.push({ rowId: rowIds[r], col: colKey(c), value: "", bg: null, fg: null, comment: "", span: 1, sent: false });
       }
       edits.push({
         rowId: rowIds[r],
@@ -1012,6 +1380,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
         fg: anchor?.fg ?? null,
         comment: anchor?.comment ?? "",
         span: c1 - c0 + 1,
+        sent: !!anchor?.sent,
       });
     }
     if (!edits.length) return;
@@ -1033,7 +1402,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
         for (let k = block.c0 + 1; k <= block.c1; k++) {
           const cell = cellAt(r, k);
           if (cell && !cell.value && !cell.comment) {
-            edits.push({ rowId: rowIds[r], col: colKey(k), value: "", bg: null, fg: null, comment: "", span: 1 });
+            edits.push({ rowId: rowIds[r], col: colKey(k), value: "", bg: null, fg: null, comment: "", span: 1, sent: false });
           }
         }
       }
@@ -1059,7 +1428,28 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
   const clickedField = menu && menu.c >= 0 && menu.c < K ? frozen[menu.c].field : null;
   const canSetStatus =
     !!mapRow && (clickedField === "driver" || clickedField === "tractor" || clickedField === "trailer");
+  const canEditCell = !!menu && menu.r >= 0 && menu.c >= 0 && menu.r < N && menu.c < C;
+  const editPressedCell = () => {
+    if (!menu || !canEditCell) return;
+    const p = clampPos({ r: menu.r, c: menu.c });
+    const c = blockAt(p.r, p.c).c0;
+    flushSync(() => {
+      setEditing({ r: p.r, c, mode: "full", value: valueAt(p.r, c) });
+      select({ r: p.r, c });
+    });
+    const el = editorRef.current;
+    if (!el) return;
+    el.focus({ preventScroll: true });
+    const end = el.value.length;
+    el.setSelectionRange(end, end);
+  };
   const menuItems: MenuItem[] = [
+    ...(isApp()
+      ? [
+          { label: "Редактировать", disabled: !canEditCell, onClick: editPressedCell } satisfies MenuItem,
+          { separator: true } satisfies MenuItem,
+        ]
+      : []),
     ...(hasVehicleCols
       ? [
           { label: "Показать на карте", disabled: !mapUnits.length, onClick: showOnMap } satisfies MenuItem,
@@ -1141,6 +1531,12 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
     { separator: true },
     { label: "Очистить содержимое", hint: "Del", onClick: () => clearSelection("value") },
     { label: "Убрать заливку", onClick: () => clearSelection("bg") },
+    {
+      label: "Удалить клетку",
+      danger: true,
+      disabled: bounds.c1 < K,
+      onClick: deleteSelectionCells,
+    },
     { separator: true },
     { label: "Вставить строку выше", onClick: () => void useStore.getState().insertRow(rowIds[bounds.r0], "above") },
     { label: "Вставить строку ниже", onClick: () => void useStore.getState().insertRow(rowIds[bounds.r1], "below") },
@@ -1208,11 +1604,16 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
           }
           onMouseLeave={data.comment ? () => setTip(null) : undefined}
         >
+          {data.sent && <span className={styles.sentMark} />}
           {data.comment && <span className={styles.noteMark} />}
           {data.value && (
             <span
               className={styles.cellText}
-              style={{ width: span * colW - 5, height: rowH - 5, color: data.fg || (data.bg ? "#202124" : undefined) }}
+              style={{
+                width: Math.max(0, span * colW - (mobileSheet ? 2 : 5)),
+                height: Math.max(0, rowH - (mobileSheet ? 2 : 5)),
+                color: data.fg || (data.bg ? "#202124" : undefined),
+              }}
             >
               <span>{data.value}</span>
             </span>
@@ -1347,11 +1748,18 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
         )
       : Math.max(span * colW, Math.min(scaled(220), Math.max(span * colW, viewport.w - leftW - 12)));
     const lines = editing.value.split("\n").length;
+    const editorFont = mobileSheet ? 16 : Math.max(fontPx, 14);
     editorNode = (
       <textarea
         ref={editorRef}
         className={styles.editor}
-        style={{ left, top: editing.r * rowH, width, height: Math.max(rowH, lines * scaled(18) + 6) }}
+        style={{
+          left,
+          top: editing.r * rowH,
+          width,
+          height: Math.max(rowH, lines * editorFont + 6),
+          fontSize: editorFont,
+        }}
         value={editing.value}
         spellCheck={false}
         onChange={onEditorChange}
@@ -1366,15 +1774,22 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
   return (
     <div
       ref={rootRef}
+      tabIndex={-1}
       className={`${styles.root} ${focused ? styles.focused : ""}`}
-      style={{ fontSize: scaled(13) }}
+      data-compact={compact ? "" : undefined}
+      style={{ fontSize: fontPx }}
       onScroll={resetScroll}
       onMouseDown={onMouseDown}
+      onPointerDown={onPointerDown}
       onDoubleClick={onDoubleClick}
       onContextMenu={(e) => {
         if ((e.target as HTMLElement).closest("textarea, [data-no-grid]") || N === 0) return;
         e.preventDefault();
         const hit = hitTest(e.clientX, e.clientY);
+        if (isApp()) {
+          touchMenuRef.current = true;
+          suppressGhostClick();
+        }
         setMenu({ x: e.clientX, y: e.clientY, r: hit.r, c: hit.c });
       }}
       onFocus={() => setFocused(true)}
@@ -1386,6 +1801,8 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
         ref={sinkRef}
         className={styles.sink}
         aria-label="Таблица"
+        readOnly={isApp()}
+        inputMode={isApp() ? "none" : undefined}
         onKeyDown={onKeyDown}
         onCopy={onCopy}
         onCut={onCut}
@@ -1393,7 +1810,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
         onChange={() => {}}
       />
 
-      <div className={styles.corner} style={{ width: leftW, height: headerH }}>
+      <div className={styles.corner} data-sheet-pan style={{ width: leftW, height: headerH }}>
         <div className={styles.gutterHeader} style={{ width: gutterW }} />
         {!hideFrozen &&
           frozen.map((f, i) => (
@@ -1415,6 +1832,7 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
 
       <div
         className={styles.left}
+        data-sheet-pan
         style={{ top: headerH, width: leftW }}
         onWheel={onWheelFrozen}
         onScroll={resetScroll}

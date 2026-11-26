@@ -26,19 +26,62 @@ type Op = { kind: "move" | "resize"; sx: number; sy: number; start: WindowGeomet
 
 const MIN_H = 140;
 
+/** В приложении заголовок выше: крупные кнопки сворачивания и закрытия. */
+function barHeight(): number {
+  if (typeof document !== "undefined" && document.documentElement.dataset.app === "1") return 56;
+  return 36;
+}
+
+type FrameMargin = { top: number; right: number; bottom: number; left: number };
+
+let cachedMargin: FrameMargin | null = null;
+
+if (typeof window !== "undefined") {
+  window.addEventListener("resize", () => {
+    cachedMargin = null;
+  });
+}
+
+/** В приложении окна тоже не заезжают под камеру и нижнюю системную полосу. */
+function frameMargin(): FrameMargin {
+  const base = 8;
+  if (typeof document === "undefined" || document.documentElement.dataset.app !== "1") {
+    return { top: base, right: base, bottom: base, left: base };
+  }
+  if (cachedMargin) return cachedMargin;
+  const probe = document.createElement("div");
+  probe.style.cssText =
+    "position:fixed;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)";
+  document.documentElement.appendChild(probe);
+  const cs = getComputedStyle(probe);
+  const px = (value: string) => {
+    const n = parseFloat(value);
+    return Number.isFinite(n) ? n : 0;
+  };
+  cachedMargin = {
+    top: base + px(cs.paddingTop),
+    right: base + px(cs.paddingRight),
+    bottom: base + px(cs.paddingBottom),
+    left: base + px(cs.paddingLeft),
+  };
+  probe.remove();
+  return cachedMargin;
+}
+
 function clampGeometry(g: WindowGeometry, vw: number, vh: number): WindowGeometry {
-  const margin = 8;
-  const w = Math.min(g.w, Math.max(160, vw - margin * 2));
-  const h = g.collapsed ? g.h : Math.min(g.h, Math.max(120, vh - margin * 2));
-  const x = Math.min(Math.max(margin, g.x), Math.max(margin, vw - w - margin));
-  const visible = g.collapsed ? 36 : h;
-  const y = Math.min(Math.max(margin, g.y), Math.max(margin, vh - visible - margin));
+  const m = frameMargin();
+  const w = Math.min(g.w, Math.max(160, vw - m.left - m.right));
+  const h = g.collapsed ? g.h : Math.min(g.h, Math.max(120, vh - m.top - m.bottom));
+  const x = Math.min(Math.max(m.left, g.x), Math.max(m.left, vw - w - m.right));
+  const visible = g.collapsed ? barHeight() : h;
+  const y = Math.min(Math.max(m.top, g.y), Math.max(m.top, vh - visible - m.bottom));
   return { ...g, x, y, w, h };
 }
 
 function fitsViewport(g: WindowGeometry, vw: number, vh: number): boolean {
-  const bottom = g.collapsed ? g.y + 36 : g.y + g.h;
-  return g.w <= vw - 16 && g.x >= 8 && g.y >= 8 && g.x + g.w <= vw - 8 && bottom <= vh - 8;
+  const m = frameMargin();
+  const bottom = g.collapsed ? g.y + barHeight() : g.y + g.h;
+  return g.w <= vw - m.left - m.right && g.x >= m.left && g.y >= m.top && g.x + g.w <= vw - m.right && bottom <= vh - m.bottom;
 }
 
 /** На экране окно целиком внутри кадра. Сохранённый размер не переписывается, пока его не меняют на этом экране. */
@@ -112,6 +155,11 @@ export default function FloatingWindow({ title, geometry, zIndex, accent, onChan
           if (e.pointerType === "mouse" && e.button !== 0) return;
           if ((e.target as HTMLElement).closest("button")) return;
           e.preventDefault();
+          try {
+            e.currentTarget.setPointerCapture(e.pointerId);
+          } catch {
+            // Жест всё равно ведём по событиям окна.
+          }
           setOp({ kind: "move", sx: e.clientX, sy: e.clientY, start: fitted });
         }}
         onDoubleClick={toggleCollapsed}
@@ -131,10 +179,16 @@ export default function FloatingWindow({ title, geometry, zIndex, accent, onChan
           <div className={styles.content}>{children}</div>
           <div
             className={styles.resize}
+            title="Потяните, чтобы изменить размер"
             onPointerDown={(e) => {
               if (e.pointerType === "mouse" && e.button !== 0) return;
               e.preventDefault();
               e.stopPropagation();
+              try {
+                e.currentTarget.setPointerCapture(e.pointerId);
+              } catch {
+                // Жест всё равно ведём по событиям окна.
+              }
               setOp({ kind: "resize", sx: e.clientX, sy: e.clientY, start: fitted });
             }}
           />

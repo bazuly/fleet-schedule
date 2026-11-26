@@ -58,6 +58,7 @@
 
 .content {
   position: relative;
+  z-index: 1;
   flex: 1;
   min-height: 0;
 }
@@ -69,6 +70,52 @@
   width: 14px;
   height: 14px;
   cursor: nwse-resize;
-  z-index: 10;
+  z-index: 20;
+  touch-action: none;
   background: linear-gradient(135deg, transparent 50%, var(--disabled) 50%, var(--disabled) 60%, transparent 60%, transparent 70%, var(--disabled) 70%, var(--disabled) 80%, transparent 80%);
+}
+
+/* В приложении заголовок и угол рассчитаны на палец, в том числе у окон карты. */
+:global(html[data-app]) .titleBar {
+  height: 56px;
+  padding: 0 8px 0 14px;
+}
+
+:global(html[data-app]) .title {
+  font-size: 15px;
+}
+
+:global(html[data-app]) .buttons {
+  gap: 4px;
+}
+
+:global(html[data-app]) .buttons button {
+  width: 29px;
+  height: 29px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1;
+}
+
+:global(html[data-app]) .resize {
+  width: 72px;
+  height: 72px;
+  background: linear-gradient(135deg, transparent 46%, var(--surface) 46%);
+  box-shadow: -1px -1px 0 var(--line-strong);
+}
+
+:global(html[data-app]) .resize::after {
+  content: "";
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  width: 34px;
+  height: 34px;
+  border-right: 5px solid var(--text-2);
+  border-bottom: 5px solid var(--text-2);
+  border-radius: 0 0 8px 0;
+  pointer-events: none;
 }

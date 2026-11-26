@@ -36,7 +36,7 @@ pub async fn list(
         return Err(AppError::BadRequest("invalid date range".into()));
     }
     let cells = sqlx::query_as::<_, Cell>(
-        "SELECT c.row_id, c.day, c.value, c.bg, c.fg, c.comment, c.span,
+        "SELECT c.row_id, c.day, c.value, c.bg, c.fg, c.comment, c.sent, c.span,
                 c.updated_by,
                 COALESCE(NULLIF(btrim(u.name), ''), u.login) AS updated_by_name,
                 c.updated_at
@@ -73,6 +73,7 @@ pub async fn put(
     let mut upsert_bgs: Vec<Option<String>> = Vec::new();
     let mut upsert_fgs: Vec<Option<String>> = Vec::new();
     let mut upsert_comments: Vec<String> = Vec::new();
+    let mut upsert_sents: Vec<bool> = Vec::new();
     let mut upsert_spans: Vec<i32> = Vec::new();
     let mut delete_rows: Vec<Uuid> = Vec::new();
     let mut delete_days: Vec<NaiveDate> = Vec::new();
@@ -83,7 +84,7 @@ pub async fn put(
         c.fg = c.fg.filter(|b| !b.is_empty());
         c.comment = c.comment.trim().chars().take(4000).collect();
         c.span = c.span.clamp(1, 62);
-        if c.value.is_empty() && c.bg.is_none() && c.fg.is_none() && c.comment.is_empty() && c.span <= 1 {
+        if c.value.is_empty() && c.bg.is_none() && c.fg.is_none() && c.comment.is_empty() && !c.sent && c.span <= 1 {
             delete_rows.push(c.row_id);
             delete_days.push(c.day);
         } else {
@@ -93,6 +94,7 @@ pub async fn put(
             upsert_bgs.push(c.bg.clone());
             upsert_fgs.push(c.fg.clone());
             upsert_comments.push(c.comment.clone());
+            upsert_sents.push(c.sent);
             upsert_spans.push(c.span);
         }
         normalized.push(c);
@@ -111,6 +113,7 @@ pub async fn put(
         &upsert_bgs,
         &upsert_fgs,
         &upsert_comments,
+        &upsert_sents,
         &upsert_spans,
         user.id,
         &user_name,
@@ -130,10 +133,10 @@ pub async fn put(
     }
     if !upsert_rows.is_empty() {
         sqlx::query(
-            "INSERT INTO cells (row_id, day, value, bg, fg, comment, span, updated_by, updated_at)
-             SELECT d.row_id, d.day, d.value, d.bg, d.fg, d.comment, d.span, $8, $9
-             FROM UNNEST($1::uuid[], $2::date[], $3::text[], $4::text[], $5::text[], $6::text[], $7::int[])
-                AS d(row_id, day, value, bg, fg, comment, span)
+            "INSERT INTO cells (row_id, day, value, bg, fg, comment, span, sent, updated_by, updated_at)
+             SELECT d.row_id, d.day, d.value, d.bg, d.fg, d.comment, d.span, d.sent, $9, $10
+             FROM UNNEST($1::uuid[], $2::date[], $3::text[], $4::text[], $5::text[], $6::text[], $7::int[], $8::bool[])
+                AS d(row_id, day, value, bg, fg, comment, span, sent)
              WHERE EXISTS (SELECT 1 FROM schedule_rows r WHERE r.id = d.row_id)
              ON CONFLICT (row_id, day) DO UPDATE SET
                 value = EXCLUDED.value,
@@ -141,6 +144,7 @@ pub async fn put(
                 fg = EXCLUDED.fg,
                 comment = EXCLUDED.comment,
                 span = EXCLUDED.span,
+                sent = EXCLUDED.sent,
                 updated_by = EXCLUDED.updated_by,
                 updated_at = EXCLUDED.updated_at",
         )
@@ -151,6 +155,7 @@ pub async fn put(
         .bind(&upsert_fgs)
         .bind(&upsert_comments)
         .bind(&upsert_spans)
+        .bind(&upsert_sents)
         .bind(user.id)
         .bind(changed_at)
         .execute(&mut *tx)
@@ -188,6 +193,7 @@ pub struct CellChange {
     pub bg: Option<String>,
     pub fg: Option<String>,
     pub span: i32,
+    pub sent: bool,
     pub deleted: bool,
 }
 
@@ -205,7 +211,7 @@ pub async fn history(
 ) -> AppResult<Json<Vec<CellChange>>> {
     let day = parse_day(&q.day)?;
     let changes = sqlx::query_as::<_, CellChange>(
-        "SELECT id, user_name, changed_at, value, comment, bg, fg, span, deleted
+        "SELECT id, user_name, changed_at, value, comment, bg, fg, span, sent, deleted
          FROM cell_changes
          WHERE row_id = $1 AND day = $2
          ORDER BY changed_at DESC, id DESC
@@ -224,7 +230,12 @@ fn display_name(user: &User) -> String {
 }
 
 fn cell_is_blank(cell: &Cell) -> bool {
-    cell.span <= 1 && cell.value.is_empty() && cell.bg.is_none() && cell.fg.is_none() && cell.comment.is_empty()
+    cell.span <= 1
+        && cell.value.is_empty()
+        && cell.bg.is_none()
+        && cell.fg.is_none()
+        && cell.comment.is_empty()
+        && !cell.sent
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -238,6 +249,7 @@ async fn record_history(
     upsert_bgs: &[Option<String>],
     upsert_fgs: &[Option<String>],
     upsert_comments: &[String],
+    upsert_sents: &[bool],
     upsert_spans: &[i32],
     user_id: Uuid,
     user_name: &str,
@@ -246,8 +258,8 @@ async fn record_history(
     if !delete_rows.is_empty() {
         sqlx::query(
             "INSERT INTO cell_changes
-                (row_id, day, user_id, user_name, changed_at, value, comment, bg, fg, span, deleted)
-             SELECT c.row_id, c.day, $3, $4, $5, c.value, c.comment, c.bg, c.fg, c.span, true
+                (row_id, day, user_id, user_name, changed_at, value, comment, bg, fg, span, sent, deleted)
+             SELECT c.row_id, c.day, $3, $4, $5, c.value, c.comment, c.bg, c.fg, c.span, c.sent, true
              FROM cells c
              JOIN UNNEST($1::uuid[], $2::date[]) AS d(row_id, day)
                ON c.row_id = d.row_id AND c.day = d.day",
@@ -263,10 +275,10 @@ async fn record_history(
     if !upsert_rows.is_empty() {
         sqlx::query(
             "INSERT INTO cell_changes
-                (row_id, day, user_id, user_name, changed_at, value, comment, bg, fg, span, deleted)
-             SELECT d.row_id, d.day, $8, $9, $10, d.value, d.comment, d.bg, d.fg, d.span, false
-             FROM UNNEST($1::uuid[], $2::date[], $3::text[], $4::text[], $5::text[], $6::text[], $7::int[])
-                AS d(row_id, day, value, bg, fg, comment, span)
+                (row_id, day, user_id, user_name, changed_at, value, comment, bg, fg, span, sent, deleted)
+             SELECT d.row_id, d.day, $9, $10, $11, d.value, d.comment, d.bg, d.fg, d.span, d.sent, false
+             FROM UNNEST($1::uuid[], $2::date[], $3::text[], $4::text[], $5::text[], $6::text[], $7::int[], $8::bool[])
+                AS d(row_id, day, value, bg, fg, comment, span, sent)
              LEFT JOIN cells c ON c.row_id = d.row_id AND c.day = d.day
              WHERE EXISTS (SELECT 1 FROM schedule_rows r WHERE r.id = d.row_id)
                AND (c.row_id IS NULL
@@ -274,7 +286,8 @@ async fn record_history(
                 OR c.comment IS DISTINCT FROM d.comment
                 OR c.bg IS DISTINCT FROM d.bg
                 OR c.fg IS DISTINCT FROM d.fg
-                OR c.span IS DISTINCT FROM d.span)",
+                OR c.span IS DISTINCT FROM d.span
+                OR c.sent IS DISTINCT FROM d.sent)",
         )
         .bind(upsert_rows)
         .bind(upsert_days)
@@ -283,6 +296,7 @@ async fn record_history(
         .bind(upsert_fgs)
         .bind(upsert_comments)
         .bind(upsert_spans)
+        .bind(upsert_sents)
         .bind(user_id)
         .bind(user_name)
         .bind(changed_at)

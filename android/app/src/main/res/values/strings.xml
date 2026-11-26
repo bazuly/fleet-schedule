@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">График транспорта</string>
+    <string name="setup_hint">Адрес сайта графика. Подойдёт туннель или компьютер в офисной сети, например http://192.168.1.10:3000</string>
+    <string name="address_hint">https://сервер</string>
+    <string name="open">Открыть</string>
+    <string name="bad_address">Укажите адрес сервера</string>
+    <string name="load_failed">Сервер не открылся. Проверьте адрес и сеть.</string>
+</resources>

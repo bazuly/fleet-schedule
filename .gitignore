@@ -10,3 +10,9 @@ frontend/.next/
 frontend/out/
 frontend/next-env.d.ts
 frontend/*.tsbuildinfo
+
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/*.apk

@@ -20,6 +20,8 @@ export interface CellData {
   bg: string | null;
   fg: string | null;
   comment: string;
+  /** Данные за этот день отправлены поставщику. */
+  sent: boolean;
   /** Сколько дней занимает ячейка. 1 — обычная клетка. */
   span: number;
   updated_by?: string | null;
@@ -27,10 +29,10 @@ export interface CellData {
   updated_at?: string | null;
 }
 
-export const EMPTY_CELL: CellData = { value: "", bg: null, fg: null, comment: "", span: 1 };
+export const EMPTY_CELL: CellData = { value: "", bg: null, fg: null, comment: "", span: 1, sent: false };
 
 export function isBlank(c: CellData): boolean {
-  return (c.span ?? 1) <= 1 && !c.value && !c.bg && !c.fg && !c.comment;
+  return (c.span ?? 1) <= 1 && !c.value && !c.bg && !c.fg && !c.comment && !c.sent;
 }
 
 export function toCellData(c: Cell): CellData {
@@ -40,6 +42,7 @@ export function toCellData(c: Cell): CellData {
     fg: c.fg,
     comment: c.comment ?? "",
     span: c.span || 1,
+    sent: !!c.sent,
     updated_by: c.updated_by ?? null,
     updated_by_name: c.updated_by_name ?? null,
     updated_at: c.updated_at ?? null,
@@ -54,6 +57,7 @@ export interface Edit {
   fg?: string | null;
   comment?: string;
   span?: number;
+  sent?: boolean;
 }
 
 interface Batch {
@@ -78,6 +82,7 @@ export interface ClipboardData {
   fgs: (string | null)[][];
   comments: string[][];
   spans: number[][];
+  sents: boolean[][];
   cut?: { gridId: Panel; rowIds: string[]; colKeys: ColKey[] };
 }
 
@@ -107,6 +112,8 @@ interface State {
   syncScroll: boolean;
   /** 1 = 100%, как в Google Таблицах. */
   zoom: number;
+  /** Временный масштаб во время щипка. Таблица его не перерисовывает. */
+  zoomPreview: number | null;
   mapTargets: MapTarget[];
 
   setUser(u: User | null): void;
@@ -129,11 +136,13 @@ interface State {
   setActive(a: ActiveSelection | null): void;
   setSyncScroll(v: boolean): void;
   setZoom(z: number): void;
+  setZoomPreview(z: number | null): void;
   stepZoom(dir: 1 | -1): void;
   openMap(t: MapTarget): void;
   closeMap(rowId: string): void;
   applyBgToActive(bg: string | null): void;
   applyFgToActive(fg: string | null): void;
+  applySentToActive(): void;
   mergeActive(): void;
   setRowStatus(rowId: string, status: string): void;
 
@@ -145,7 +154,17 @@ interface State {
 
 const UNDO_LIMIT = 200;
 const ZOOM_KEY = "fleet.zoom";
-export const ZOOMS = [0.5, 0.75, 0.9, 1, 1.25, 1.5, 2];
+export const ZOOM_MIN = 0.25;
+export const ZOOM_MAX = 2;
+/** Стартовый масштаб телефона, пока пользователь сам его не менял. */
+export const MOBILE_ZOOM = 0.35;
+export const ZOOMS = [0.25, 0.35, 0.5, 0.75, 0.9, 1, 1.25, 1.5, 2];
+
+function clampZoom(zoom: number): number {
+  if (!Number.isFinite(zoom)) return 1;
+  const clamped = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoom));
+  return Math.round(clamped * 1000) / 1000;
+}
 
 function defaultRange() {
   const today = todayIso();
@@ -225,6 +244,7 @@ export const useStore = create<State>((set, get) => {
     active: null,
     syncScroll: true,
     zoom: 1,
+    zoomPreview: null,
     mapTargets: [],
 
     setUser: (user) => set({ user }),
@@ -340,13 +360,21 @@ export const useStore = create<State>((set, get) => {
           const bg = e.bg !== undefined ? e.bg : prev.bg;
           const fg = e.fg !== undefined ? e.fg : prev.fg;
           const comment = e.comment !== undefined ? e.comment : prev.comment;
+          const sent = e.sent !== undefined ? e.sent : !!prev.sent;
           let span = e.span !== undefined ? Math.max(1, Math.min(62, e.span)) : prev.span || 1;
           // Пустая клетка не может оставаться объединением, если ширину не задали явно.
-          if (!value && !bg && !fg && !comment && !(e.span !== undefined && e.span > 1)) span = 1;
-          if (value === prev.value && bg === prev.bg && fg === prev.fg && comment === prev.comment && span === (prev.span || 1))
+          if (!value && !bg && !fg && !comment && !sent && !(e.span !== undefined && e.span > 1)) span = 1;
+          if (
+            value === prev.value &&
+            bg === prev.bg &&
+            fg === prev.fg &&
+            comment === prev.comment &&
+            sent === !!prev.sent &&
+            span === (prev.span || 1)
+          )
             continue;
-          cellsBefore.push({ row_id: e.rowId, day, ...prev, span: prev.span || 1 });
-          cellsAfter.push({ row_id: e.rowId, day, value, bg, fg, comment, span });
+          cellsBefore.push({ row_id: e.rowId, day, ...prev, span: prev.span || 1, sent: !!prev.sent });
+          cellsAfter.push({ row_id: e.rowId, day, value, bg, fg, comment, span, sent });
         } else if (e.value !== undefined) {
           const field = colField(e.col);
           const prev = rows[e.rowId][field];
@@ -390,14 +418,26 @@ export const useStore = create<State>((set, get) => {
     setActive: (active) => set({ active }),
     setSyncScroll: (syncScroll) => set({ syncScroll }),
     setZoom(zoom) {
-      const next = ZOOMS.includes(zoom) ? zoom : 1;
+      const next = clampZoom(zoom);
+      if (next === get().zoom) {
+        if (get().zoomPreview !== null) set({ zoomPreview: null });
+        return;
+      }
       localStorage.setItem(ZOOM_KEY, String(next));
-      set({ zoom: next });
+      set({ zoom: next, zoomPreview: null });
+    },
+    setZoomPreview(zoom) {
+      const next = zoom === null ? null : clampZoom(zoom);
+      if (next === get().zoomPreview) return;
+      set({ zoomPreview: next });
     },
     stepZoom(dir) {
       const current = get().zoom;
-      const index = Math.max(0, ZOOMS.indexOf(current));
-      get().setZoom(ZOOMS[Math.min(ZOOMS.length - 1, Math.max(0, index + dir))]);
+      const next =
+        dir > 0
+          ? (ZOOMS.find((z) => z > current + 0.001) ?? ZOOM_MAX)
+          : ([...ZOOMS].reverse().find((z) => z < current - 0.001) ?? ZOOM_MIN);
+      get().setZoom(next);
     },
     openMap(target) {
       const rest = get().mapTargets.filter((t) => t.rowId !== target.rowId);
@@ -425,6 +465,19 @@ export const useStore = create<State>((set, get) => {
       get().applyEdits(edits);
     },
 
+    applySentToActive() {
+      const a = get().active;
+      if (!a) return;
+      const { cells } = get();
+      const targets: { rowId: string; col: ColKey }[] = [];
+      for (const rowId of a.rowIds)
+        for (const col of a.colKeys) if (isDayCol(col)) targets.push({ rowId, col });
+      if (!targets.length) return;
+      const allSent = targets.every(({ rowId, col }) => cells.get(cellKey(rowId, colDay(col)))?.sent);
+      const sent = !allSent;
+      get().applyEdits(targets.map((t) => ({ ...t, sent })));
+    },
+
     mergeActive() {
       const a = get().active;
       if (!a) return;
@@ -447,7 +500,7 @@ export const useStore = create<State>((set, get) => {
         for (const day of spanDays.slice(1)) {
           const cell = cells.get(cellKey(rowId, day));
           if (cell?.value) losesText = true;
-          if (cell) edits.push({ rowId, col: dayCol(day), value: "", bg: null, fg: null, comment: "", span: 1 });
+          if (cell) edits.push({ rowId, col: dayCol(day), value: "", bg: null, fg: null, comment: "", span: 1, sent: false });
         }
         edits.push({
           rowId,
@@ -457,6 +510,7 @@ export const useStore = create<State>((set, get) => {
           fg: anchor.fg,
           comment: anchor.comment,
           span: spanDays.length,
+          sent: !!anchor.sent,
         });
       }
       if (losesText && !confirm("Объединить ячейки? Останется только текст левой ячейки в каждой строке.")) return;

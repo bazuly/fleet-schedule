@@ -29,6 +29,20 @@
   cursor: pointer;
 }
 
+:global(html[data-app]) .unit {
+  min-height: 22px;
+  padding: 2px 8px;
+  gap: 4px;
+  font-size: 12px;
+}
+
+:global(html[data-app]) .map :global(.leaflet-control-zoom a) {
+  width: 48px;
+  height: 48px;
+  line-height: 48px;
+  font-size: 24px;
+}
+
 .unit:hover:not(:disabled) {
   background: var(--hover-2);
 }

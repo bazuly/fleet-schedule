@@ -27,6 +27,7 @@ services:
       ADMIN_LOGIN: ${ADMIN_LOGIN:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       RUST_LOG: ${RUST_LOG:-info}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET не задан}
       AXENTA_BASE_URL: ${AXENTA_BASE_URL:-https://axenta.cloud}
       AXENTA_USERNAME: ${AXENTA_USERNAME:-}
       AXENTA_PASSWORD: ${AXENTA_PASSWORD:-}

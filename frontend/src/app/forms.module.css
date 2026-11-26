@@ -9,6 +9,10 @@
   background: var(--surface-4);
 }
 
+:global(html[data-app]) .page {
+  height: 100%;
+}
+
 .card {
   display: flex;
   flex-direction: column;
@@ -147,6 +151,19 @@
   color: var(--danger);
 }
 
+.create {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr auto;
+  gap: 8px 10px;
+  align-items: end;
+}
+
+.hint {
+  margin-top: -6px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
 .inline {
   display: flex;
   gap: 8px;
@@ -160,7 +177,11 @@
 }
 
 @media (max-width: 720px) {
-  .inline input:not([type="checkbox"]) {
+  .create {
+    grid-template-columns: 1fr;
+  }
+
+  :global(html:not([data-app])) .inline input:not([type="checkbox"]) {
     flex: 1 1 100%;
   }
 

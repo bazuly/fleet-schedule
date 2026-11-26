@@ -5,10 +5,12 @@ use argon2::{
 use axum::{
     Json,
     extract::{FromRequestParts, Query, State},
-    http::{HeaderMap, header, request::Parts},
+    http::{HeaderMap, HeaderValue, header, request::Parts},
+    response::IntoResponse,
 };
-use chrono::{Duration, Utc};
-use serde::Deserialize;
+use chrono::Utc;
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -18,7 +20,35 @@ use crate::{
     state::AppState,
 };
 
-const SESSION_TTL_DAYS: i64 = 30;
+/// Сколько живёт токен без новых заходов. Каждый успешный заход продлевает его.
+const TOKEN_TTL_SECS: i64 = 7 * 24 * 60 * 60;
+
+#[derive(Serialize, Deserialize)]
+struct Claims {
+    sub: Uuid,
+    iat: i64,
+    exp: i64,
+}
+
+pub fn issue_token(user_id: Uuid, secret: &[u8]) -> AppResult<String> {
+    let now = Utc::now().timestamp();
+    let claims = Claims {
+        sub: user_id,
+        iat: now,
+        exp: now + TOKEN_TTL_SECS,
+    };
+    encode(&Header::new(Algorithm::HS256), &claims, &EncodingKey::from_secret(secret))
+        .map_err(|e| AppError::Other(anyhow::anyhow!("jwt: {e}")))
+}
+
+fn user_id_from_token(token: &str, secret: &[u8]) -> AppResult<Uuid> {
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.leeway = 60;
+    validation.validate_aud = false;
+    let data = decode::<Claims>(token, &DecodingKey::from_secret(secret), &validation)
+        .map_err(|_| AppError::Unauthorized)?;
+    Ok(data.claims.sub)
+}
 
 pub fn hash_password(password: &str) -> anyhow::Result<String> {
     let salt = SaltString::generate(&mut OsRng);
@@ -36,10 +66,6 @@ fn verify_password(password: &str, hash: &str) -> bool {
                 .is_ok()
         })
         .unwrap_or(false)
-}
-
-fn new_token() -> String {
-    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
 pub struct AuthUser(pub User);
@@ -68,12 +94,11 @@ impl FromRequestParts<AppState> for AuthUser {
                 .ok_or(AppError::Unauthorized)?,
         };
 
+        let user_id = user_id_from_token(&token, &state.jwt_secret)?;
         let user = sqlx::query_as::<_, User>(
-            "SELECT u.id, u.login, u.name, u.is_admin
-             FROM sessions s JOIN users u ON u.id = s.user_id
-             WHERE s.token = $1 AND s.expires_at > now()",
+            "SELECT id, login, name, is_admin FROM users WHERE id = $1",
         )
-        .bind(&token)
+        .bind(user_id)
         .fetch_optional(&state.db)
         .await?
         .ok_or(AppError::Unauthorized)?;
@@ -106,37 +131,25 @@ pub async fn login(
         return Err(AppError::Unauthorized);
     }
 
-    let token = new_token();
-    sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)")
-        .bind(&token)
-        .bind(id)
-        .bind(Utc::now() + Duration::days(SESSION_TTL_DAYS))
-        .execute(&state.db)
-        .await?;
-    sqlx::query("DELETE FROM sessions WHERE expires_at < now()")
-        .execute(&state.db)
-        .await?;
-
+    let token = issue_token(id, &state.jwt_secret)?;
     let user = User { id, login, name, is_admin };
     Ok(Json(json!({ "token": token, "user": user })))
 }
 
-pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Json<Value>> {
-    if let Some(token) = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-    {
-        sqlx::query("DELETE FROM sessions WHERE token = $1")
-            .bind(token)
-            .execute(&state.db)
-            .await?;
-    }
-    Ok(Json(json!({ "ok": true })))
+pub async fn logout() -> Json<Value> {
+    // Токен живёт у клиента. Выход стирает его в браузере, серверу отзывать нечего.
+    Json(json!({ "ok": true }))
 }
 
-pub async fn me(AuthUser(user): AuthUser) -> Json<User> {
-    Json(user)
+pub async fn me(State(state): State<AppState>, AuthUser(user): AuthUser) -> AppResult<impl IntoResponse> {
+    // Продлеваем на неделю от этого захода, чтобы открытое приложение не выкидывало.
+    let token = issue_token(user.id, &state.jwt_secret)?;
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-auth-token",
+        HeaderValue::from_str(&token).map_err(|_| AppError::Other(anyhow::anyhow!("jwt header")))?,
+    );
+    Ok((headers, Json(user)))
 }
 
 #[derive(Deserialize)]

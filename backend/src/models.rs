@@ -30,6 +30,9 @@ pub struct Cell {
     pub fg: Option<String>,
     #[serde(default)]
     pub comment: String,
+    /// Данные за этот день отправлены поставщику.
+    #[serde(default)]
+    pub sent: bool,
     /// Сколько дней занимает ячейка. Продолжения отдельными строками не хранятся.
     #[serde(default = "default_span")]
     pub span: i32,
