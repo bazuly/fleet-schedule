@@ -3,8 +3,11 @@
   z-index: 1000;
   min-width: min(230px, calc(100vw - 16px));
   max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
   box-sizing: border-box;
   padding: 6px 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--surface);
   border-radius: 6px;
   box-shadow: var(--shadow);
@@ -45,21 +48,28 @@
 }
 
 .menu.submenu {
-  position: absolute;
-  top: -6px;
-  left: calc(100% - 4px);
-  min-width: 190px;
+  position: fixed;
+  z-index: 1001;
+  min-width: 200px;
 }
 
-.menu.submenuLeft {
-  left: auto;
-  right: calc(100% - 4px);
+.inlineList {
+  margin: 2px 8px 4px;
+  padding: 2px 0;
+  border-left: 3px solid var(--line-strong);
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--hover-2) 80%, transparent);
 }
 
 :global(html[data-app]) .item {
   min-height: 44px;
   padding: 10px 16px;
   font-size: 16px;
+}
+
+.inlineList .item,
+:global(html[data-app]) .inlineList .item {
+  padding-left: 18px;
 }
 
 .item:hover:not(:disabled) {

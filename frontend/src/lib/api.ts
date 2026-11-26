@@ -86,11 +86,46 @@ export const CLIENT_ID =
     : Math.random().toString(36).slice(2);
 
 const TOKEN_KEY = "fleet.token";
+const TOKEN_COOKIE = "fleet_token";
+/** Совпадает со сроком JWT на сервере. */
+const TOKEN_MAX_AGE = 60 * 60 * 24 * 7;
+
+function readTokenCookie(): string | null {
+  if (typeof document === "undefined") return null;
+  const prefix = `${TOKEN_COOKIE}=`;
+  for (const part of document.cookie.split("; ")) {
+    if (!part.startsWith(prefix)) continue;
+    try {
+      return decodeURIComponent(part.slice(prefix.length)) || null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function writeTokenCookie(token: string, maxAge: number) {
+  const secure = window.location.protocol === "https:" ? "; Secure" : "";
+  document.cookie = `${TOKEN_COOKIE}=${encodeURIComponent(token)}; Max-Age=${maxAge}; Path=/; SameSite=Lax${secure}`;
+}
 
 export const tokenStore = {
-  get: () => (typeof window === "undefined" ? null : localStorage.getItem(TOKEN_KEY)),
-  set: (t: string) => localStorage.setItem(TOKEN_KEY, t),
-  clear: () => localStorage.removeItem(TOKEN_KEY),
+  get(): string | null {
+    if (typeof window === "undefined") return null;
+    const saved = localStorage.getItem(TOKEN_KEY);
+    if (saved) return saved;
+    const cookie = readTokenCookie();
+    if (cookie) localStorage.setItem(TOKEN_KEY, cookie);
+    return cookie;
+  },
+  set(token: string) {
+    localStorage.setItem(TOKEN_KEY, token);
+    writeTokenCookie(token, TOKEN_MAX_AGE);
+  },
+  clear() {
+    localStorage.removeItem(TOKEN_KEY);
+    writeTokenCookie("", 0);
+  },
 };
 
 export class ApiError extends Error {
@@ -124,6 +159,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     }
     throw new ApiError(res.status, message);
   }
+  const renewed = res.headers.get("x-auth-token");
+  if (renewed) tokenStore.set(renewed);
   return res.json() as Promise<T>;
 }
 

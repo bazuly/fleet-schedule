@@ -33,12 +33,19 @@ pub struct AppState {
     pub events: broadcast::Sender<Event>,
     /// Пусто, если в окружении нет логина и пароля Axenta.
     pub axenta: Option<Arc<Axenta>>,
+    /// Секрет подписи JWT. Смена значения разлогинивает всех.
+    pub jwt_secret: Arc<Vec<u8>>,
 }
 
 impl AppState {
-    pub fn new(db: PgPool) -> Self {
+    pub fn new(db: PgPool, jwt_secret: Vec<u8>) -> Self {
         let (events, _) = broadcast::channel(1024);
-        Self { db, events, axenta: Axenta::from_env().map(Arc::new) }
+        Self {
+            db,
+            events,
+            axenta: Axenta::from_env().map(Arc::new),
+            jwt_secret: Arc::new(jwt_secret),
+        }
     }
 
     pub fn publish(&self, event: Event) {

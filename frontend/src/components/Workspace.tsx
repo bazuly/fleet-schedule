@@ -154,6 +154,10 @@ export default function Workspace() {
       return;
     }
     let disconnect: (() => void) | undefined;
+    // Пока приложение открыто, раз в 12 часов заход продлевает токен ещё на неделю.
+    const refresh = window.setInterval(() => {
+      void api.me().then((user) => useStore.getState().setUser(user)).catch(() => {});
+    }, 12 * 60 * 60 * 1000);
     (async () => {
       try {
         const user = await api.me();
@@ -172,7 +176,10 @@ export default function Workspace() {
         // При 401 api уже перенаправил на страницу входа.
       }
     })();
-    return () => disconnect?.();
+    return () => {
+      window.clearInterval(refresh);
+      disconnect?.();
+    };
   }, [router, mapsRestored]);
 
   const updateWindows = useCallback((fn: (w: WindowsState) => WindowsState) => {

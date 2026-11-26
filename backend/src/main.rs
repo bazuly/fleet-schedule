@@ -16,6 +16,7 @@ use axum::{
     routing::{delete, get, patch, post},
 };
 use sqlx::postgres::PgPoolOptions;
+use axum::http::HeaderName;
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
@@ -40,7 +41,11 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     sqlx::migrate!("./migrations").run(&db).await?;
 
-    let state = AppState::new(db);
+    let jwt_secret = std::env::var("JWT_SECRET").map_err(|_| anyhow::anyhow!("JWT_SECRET не задан"))?;
+    if jwt_secret.len() < 16 {
+        anyhow::bail!("JWT_SECRET короче 16 символов");
+    }
+    let state = AppState::new(db, jwt_secret.into_bytes());
     if state.axenta.is_none() {
         tracing::warn!("AXENTA_USERNAME/AXENTA_PASSWORD не заданы — карта транспорта отключена");
     }
@@ -65,7 +70,8 @@ async fn main() -> anyhow::Result<()> {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_headers(Any)
+        .expose_headers([HeaderName::from_static("x-auth-token")]);
 
     let app = Router::new()
         .nest("/api", api)

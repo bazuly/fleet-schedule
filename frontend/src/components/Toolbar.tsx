@@ -630,6 +630,11 @@ export function FormulaBar() {
     if (who) label = `${who.split("\n")[0]} · ${label}`;
   }
 
+  // Удаление клетки меняет значение снаружи: черновик строки формул не должен вернуть старую надпись.
+  useEffect(() => {
+    setDraftState((prev) => (prev && prev.key === activeKey && prev.value !== value ? null : prev));
+  }, [value, activeKey]);
+
   const commit = () => {
     if (draft === null || !active) return;
     applyEdits([{ rowId: active.anchorRowId, col: active.anchorCol, value: draft }]);

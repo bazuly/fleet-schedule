@@ -246,7 +246,7 @@
 
 .cell {
   position: absolute;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .noteMark {

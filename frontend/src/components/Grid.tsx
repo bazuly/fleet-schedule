@@ -678,6 +678,33 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
     [bounds, rowIds, colKey, applyEdits, K],
   );
 
+  const deleteSelectionCells = useCallback(() => {
+    // Закрываем редактор без сохранения, иначе его текст вернётся в клетку после стирания.
+    setEditing(null);
+    setTip(null);
+    const edits: Edit[] = [];
+    const seen = new Set<string>();
+    const wipeDay = (r: number, c: number) => {
+      if (r < 0 || r >= N || c < K || c >= C) return;
+      const block = blockAt(r, c);
+      const key = `${r}:${block.c0}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const blank = { value: "", bg: null, fg: null, comment: "", span: 1, sent: false };
+      edits.push({ rowId: rowIds[r], col: colKey(block.c0), ...blank });
+      for (let k = block.c0 + 1; k <= block.c1; k++) {
+        if (cellAt(r, k)) edits.push({ rowId: rowIds[r], col: colKey(k), ...blank });
+      }
+    };
+    if (bounds.c1 >= K) {
+      for (let r = bounds.r0; r <= bounds.r1; r++) {
+        for (let c = Math.max(bounds.c0, K); c <= bounds.c1; c++) wipeDay(r, c);
+      }
+    }
+    if (menu) wipeDay(menu.r, menu.c);
+    if (edits.length) applyEdits(edits);
+  }, [bounds, rowIds, colKey, applyEdits, K, C, N, blockAt, cellAt, menu, setEditing]);
+
   // ---------- Автозаполнение маркером ----------
 
   const fillRect = useCallback(
@@ -1249,6 +1276,12 @@ export default function Grid({ panel, frozen, hideFrozen = false }: Props) {
     { separator: true },
     { label: "Очистить содержимое", hint: "Del", onClick: () => clearSelection("value") },
     { label: "Убрать заливку", onClick: () => clearSelection("bg") },
+    {
+      label: "Удалить клетку",
+      danger: true,
+      disabled: bounds.c1 < K,
+      onClick: deleteSelectionCells,
+    },
     { separator: true },
     { label: "Вставить строку выше", onClick: () => void useStore.getState().insertRow(rowIds[bounds.r0], "above") },
     { label: "Вставить строку ниже", onClick: () => void useStore.getState().insertRow(rowIds[bounds.r1], "below") },
