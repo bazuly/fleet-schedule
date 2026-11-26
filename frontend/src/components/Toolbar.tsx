@@ -24,6 +24,12 @@ const FONT_COLORS = [
 
 export type PanelKey = "unassigned" | "pickups";
 
+declare global {
+  interface Window {
+    FleetApp?: { openSetup: () => void };
+  }
+}
+
 interface Props {
   visible: Record<PanelKey, boolean>;
   onToggle(panel: PanelKey): void;
@@ -60,6 +66,7 @@ export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNam
   const [bellBox, setBellBox] = useState<{ left: number; top: number } | null>(null);
   const bellRef = useRef<HTMLDivElement>(null);
   const [phoneOpen, setPhoneOpen] = useState(false);
+  const [inApp, setInApp] = useState(false);
   const [phoneBox, setPhoneBox] = useState<{ left: number; top: number } | null>(null);
   const phoneRef = useRef<HTMLDivElement>(null);
   const rows = useStore((s) => s.rows);
@@ -81,6 +88,7 @@ export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNam
   };
 
   useEffect(() => {
+    setInApp(typeof window.FleetApp?.openSetup === "function");
     const saved = Number(localStorage.getItem("fleet.zoom"));
     if (ZOOMS.includes(saved)) useStore.getState().setZoom(saved);
     const onKey = (e: KeyboardEvent) => {
@@ -381,6 +389,11 @@ export default function Toolbar({ visible, onToggle, namesCollapsed, onToggleNam
           <Link className={styles.link} href="/users">
             Пользователи
           </Link>
+        )}
+        {inApp && (
+          <button onMouseDown={keepFocus} title="Сменить адрес сервера" onClick={() => window.FleetApp?.openSetup()}>
+            Сервер
+          </button>
         )}
         <button onClick={logout}>Выйти</button>
       </div>

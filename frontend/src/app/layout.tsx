@@ -9,7 +9,10 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
   viewportFit: "cover",
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -19,7 +22,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <script
           dangerouslySetInnerHTML={{
             __html:
-              'try{if(localStorage.getItem("fleet.theme")==="dark")document.documentElement.setAttribute("data-theme","dark")}catch(e){}',
+              'try{var r=document.documentElement;if(localStorage.getItem("fleet.theme")==="dark")r.setAttribute("data-theme","dark");if(navigator.userAgent.indexOf("FleetScheduleAndroid")!==-1)r.setAttribute("data-app","1")}catch(e){}',
           }}
         />
         {children}

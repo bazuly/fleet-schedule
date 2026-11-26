@@ -323,12 +323,39 @@
   display: none;
 }
 
+/* Приложение берёт десктопную шапку: одна строка, лишнее уезжает вбок, кнопки не сжимаются. */
+:global(html[data-app]) .group button.namesToggle {
+  display: inline-flex;
+}
+
+:global(html[data-app]) .toolbar {
+  height: 52px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+:global(html[data-app]) .group button,
+:global(html[data-app]) .link {
+  height: 40px;
+}
+
+:global(html[data-app]) .dateLabel input {
+  height: 36px;
+}
+
+:global(html[data-app]) .group,
+:global(html[data-app]) .link,
+:global(html[data-app]) .user {
+  flex-shrink: 0;
+}
+
 @media (max-width: 720px) {
-  .group button.namesToggle {
+  :global(html:not([data-app])) .group button.namesToggle {
     display: inline-flex;
   }
 
-  .toolbar {
+  :global(html:not([data-app])) .toolbar {
     height: auto;
     flex-wrap: wrap;
     align-content: flex-start;
@@ -338,47 +365,47 @@
     overflow: visible;
   }
 
-  .group {
+  :global(html:not([data-app])) .group {
     flex-wrap: nowrap;
     padding-left: 6px;
     gap: 2px;
     max-width: 100%;
   }
 
-  .group button,
-  .link {
-    height: 30px;
-    padding: 0 5px;
-    font-size: 12px;
+  :global(html:not([data-app])) .group button,
+  :global(html:not([data-app])) .link {
+    height: 40px;
+    padding: 0 8px;
+    font-size: 13px;
   }
 
-  .spacer {
+  :global(html:not([data-app])) .spacer {
     display: none;
   }
 
-  .dateLabel input {
+  :global(html:not([data-app])) .dateLabel input {
     width: 6.5rem;
     max-width: 34vw;
     height: 30px;
   }
 
-  .user {
+  :global(html:not([data-app])) .user {
     max-width: 96px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .cellRef {
+  :global(html:not([data-app])) .cellRef {
     width: 88px;
     flex-shrink: 0;
   }
 
-  .pendingMenu {
+  :global(html:not([data-app])) .pendingMenu {
     width: min(320px, calc(100vw - 16px));
   }
 
-  .formulaBar {
+  :global(html:not([data-app])) .formulaBar {
     height: 36px;
   }
 }

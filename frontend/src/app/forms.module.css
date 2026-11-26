@@ -9,6 +9,10 @@
   background: var(--surface-4);
 }
 
+:global(html[data-app]) .page {
+  height: 100%;
+}
+
 .card {
   display: flex;
   flex-direction: column;
@@ -160,33 +164,33 @@
 }
 
 @media (max-width: 720px) {
-  .inline input:not([type="checkbox"]) {
+  :global(html:not([data-app])) .inline input:not([type="checkbox"]) {
     flex: 1 1 100%;
   }
 
-  .table,
-  .table tbody,
-  .table tr,
-  .table td {
+  :global(html:not([data-app])) .table,
+  :global(html:not([data-app])) .table tbody,
+  :global(html:not([data-app])) .table tr,
+  :global(html:not([data-app])) .table td {
     display: block;
     width: 100%;
   }
 
-  .table thead {
+  :global(html:not([data-app])) .table thead {
     display: none;
   }
 
-  .table tr {
+  :global(html:not([data-app])) .table tr {
     padding: 8px 0;
     border-bottom: 1px solid var(--line-soft);
   }
 
-  .table td {
+  :global(html:not([data-app])) .table td {
     border: 0;
     padding: 2px 0;
   }
 
-  .actions {
+  :global(html:not([data-app])) .actions {
     justify-content: flex-start;
     margin-top: 6px;
   }
